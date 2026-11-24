@@ -19,9 +19,20 @@ import top.niunaijun.blackbox.utils.compat.ContentProviderCompat;
  * 此处无Bug
  */
 public class ProviderCall {
+    /**
+     * Retries for a single provider call.
+     *
+     * <p>Kept small on purpose: {@link #callSafely} is invoked once per virtual
+     * service during startup (nine of them), all from Application.onCreate, so the
+     * worst case is multiplied by nine. With the previous value of 5 the total
+     * reached ~18s in a single thread and the launcher reported the app as
+     * unresponsive (ANR) whenever the :black process was unhealthy.
+     */
+    private static final int DEFAULT_RETRY = 2;
+
     public static Bundle callSafely(String authority, String methodName, String arg, Bundle bundle) {
         try {
-            return call(authority, BlackBoxCore.getContext(), methodName, arg, bundle, 5);
+            return call(authority, BlackBoxCore.getContext(), methodName, arg, bundle, DEFAULT_RETRY);
         } catch (IllegalAccessException e) {
             e.printStackTrace();
         }

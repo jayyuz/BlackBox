@@ -4,16 +4,19 @@ import android.Manifest;
 import android.app.ActivityManager;
 import android.app.IServiceConnection;
 import android.content.ComponentName;
+import android.content.Context;
 import android.content.IIntentReceiver;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ProviderInfo;
 import android.content.pm.ResolveInfo;
+import android.os.Build;
 import android.os.IBinder;
 import android.os.IInterface;
 import android.util.Log;
 
 import java.lang.ref.WeakReference;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 
@@ -48,6 +51,7 @@ import top.niunaijun.blackbox.proxy.record.ProxyBroadcastRecord;
 import top.niunaijun.blackbox.proxy.record.ProxyPendingRecord;
 import top.niunaijun.blackbox.utils.MethodParameterUtils;
 import top.niunaijun.blackbox.utils.Reflector;
+import top.niunaijun.blackbox.utils.Slog;
 import top.niunaijun.blackbox.utils.compat.ActivityManagerCompat;
 import top.niunaijun.blackbox.utils.compat.BuildCompat;
 import top.niunaijun.blackbox.utils.compat.ParceledListSliceCompat;
@@ -523,8 +527,19 @@ public class IActivityManagerProxy extends ClassInvocationStub {
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
             MethodParameterUtils.replaceFirstAppPkg(args);
-            int receiverIndex = getReceiverIndex();
-            if (args[receiverIndex] != null) {
+            // callerPackage must be non-null whatever replaceFirstAppPkg matched.
+            // It rewrites "a string naming an installed guest", which may be a
+            // different slot (receiverId, for instance), while callerPackage itself
+            // stays null. system_server then fails with:
+            //   SecurityException: Given caller package null is not running in
+            //   process ProcessRecord{... blackboxa64:p0/u0a391}
+            // Quark hits this from BroadcastStickyCache while PowerMonitor registers
+            // for the battery broadcast during WebView startup.
+            ensureCallerPackage(args);
+            applyReceiverExportedFlag(args);
+
+            int receiverIndex = indexOfType(args, IIntentReceiver.class);
+            if (receiverIndex >= 0) {
                 IIntentReceiver intentReceiver = (IIntentReceiver) args[receiverIndex];
                 IIntentReceiver proxy = InnerReceiverDelegate.createProxy(intentReceiver);
 
@@ -535,30 +550,147 @@ public class IActivityManagerProxy extends ClassInvocationStub {
 
                 args[receiverIndex] = proxy;
             }
-            // ignore permission
-            if (args[getPermissionIndex()] != null) {
-                args[getPermissionIndex()] = null;
+
+            // Ignore the broadcast permission: a guest may pass its own signature
+            // permission, which the host does not hold. requiredPermission sits
+            // right after the receiver on every release; null it when present.
+            int receiverPos = indexOfType(args, IIntentReceiver.class);
+            for (int i = receiverPos + 1; i < args.length; i++) {
+                if (args[i] instanceof String) {
+                    args[i] = null;
+                    break;
+                }
             }
-            return method.invoke(who, args);
+            try {
+                return method.invoke(who, args);
+            } catch (InvocationTargetException e) {
+                Throwable cause = e.getCause() == null ? e : e.getCause();
+                // A receiver that system_server refuses must not kill the guest. The
+                // usual reason inside the container is a check that resolves the
+                // caller through the AttributionSource instead of the callerPackage
+                // argument; MIUI answers "Given caller package null is not running in
+                // process", and there is no argument we can substitute to satisfy it.
+                //
+                // Callers of registerReceiver essentially never look at the result,
+                // and the ones that do (a sticky-broadcast probe) can live with a
+                // null: Quark, for instance, only uses it to detect the charger.
+                Slog.w("AMSBroadcast", "registerReceiver rejected: " + cause);
+                return null;
+            }
         }
 
-        public int getReceiverIndex() {
-            if (BuildCompat.isS()) {
-                return 4;
-            } else if (BuildCompat.isR()) {
-                return 3;
+        /**
+         * Guarantees a non-null caller package.
+         *
+         * <p>{@code callerPackage} is the first String parameter in every receiver
+         * registration signature, and system_server refuses a null: it cannot map
+         * the call to a ProcessRecord. Filling it with the host package is correct
+         * because the binder call genuinely comes from the host process.
+         */
+        private static void ensureCallerPackage(Object[] args) {
+            // callerPackage is args[1] in both registerReceiver overloads:
+            //   (caller, callerPackage, receiver, filter, permission, userId, flags)
+            //   (caller, callerPackage, callingFeatureId, receiverId, receiver,
+            //    filter, requiredPermission, userId, flags)
+            if (args.length > 1 && args[1] == null) {
+                args[1] = BlackBoxCore.getHostPkg();
             }
-            return 2;
+            // callingFeatureId: the framework's BroadcastStickyCache leaves it null
+            // and some ROMs (MIUI here) resolve the calling process through it,
+            // answering "Given caller package null is not running in process".
+            // The host has no feature id either, so the package name is the only
+            // sane non-null value - it identifies the same process.
+            if (args.length > 2 && args[2] == null && args[1] instanceof String) {
+                args[2] = args[1];
+            }
         }
+    }
 
-        public int getPermissionIndex() {
-            if (BuildCompat.isS()) {
-                return 6;
-            } else if (BuildCompat.isR()) {
-                return 5;
+    /**
+     * Index of the first argument assignable to {@code type}, or -1.
+     *
+     * <p>Looking arguments up by position does not work across API levels: the
+     * receiver sits at index 2/3/4 depending on release, and
+     * {@code registerReceiverWithFeature} adds a {@code callerFeatureId} that
+     * shifts everything after it.
+     */
+    static int indexOfType(Object[] args, Class<?> type) {
+        for (int i = 0; i < args.length; i++) {
+            if (args[i] != null && type.isInstance(args[i])) {
+                return i;
             }
-            return 4;
         }
+        return -1;
+    }
+
+    /**
+     * Index of the first String argument.
+     */
+    static int indexOfString(Object[] args) {
+        for (int i = 0; i < args.length; i++) {
+            if (args[i] instanceof String) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Adds {@code RECEIVER_EXPORTED} to a receiver registration that omits both
+     * exported flags.
+     *
+     * <p>Since Android 14 ({@code BroadcastController}) a receiver registered for
+     * non-system broadcasts must pass exactly one of RECEIVER_EXPORTED /
+     * RECEIVER_NOT_EXPORTED, and the check is applied against the <em>caller's</em>
+     * target SDK. Inside the container the caller is the host, which targets 36,
+     * so a guest that still uses the two-argument {@code registerReceiver} - legal
+     * for its own lower target SDK - dies with:
+     *
+     * <pre>
+     * SecurityException: ... One of RECEIVER_EXPORTED or RECEIVER_NOT_EXPORTED
+     * should be specified when a receiver isn't being registered exclusively for
+     * system broadcasts
+     * </pre>
+     *
+     * <p>EXPORTED preserves the behaviour the guest had on its own: before Android
+     * 14 an implicit flag meant "reachable by other apps".
+     */
+    static void applyReceiverExportedFlag(Object[] args) {
+        if (Build.VERSION.SDK_INT < 33) {
+            return;
+        }
+        int flagsIndex = indexOfFlags(args);
+        if (flagsIndex < 0) {
+            return;
+        }
+        int flags = (Integer) args[flagsIndex];
+        if ((flags & Context.RECEIVER_EXPORTED) != 0
+                || (flags & Context.RECEIVER_NOT_EXPORTED) != 0) {
+            return;
+        }
+        args[flagsIndex] = flags | Context.RECEIVER_EXPORTED;
+    }
+
+    /**
+     * Index of the {@code flags} int in a receiver-registration call.
+     *
+     * <p>{@code flags} is always the last int of the signature:
+     * <pre>
+     * registerReceiver(caller, callerPackage, receiver, filter, permission,
+     *                  userId, flags)                                  // API 30-32
+     * registerReceiverWithFeature(caller, callerPackage, callingFeatureId,
+     *                  receiverId, receiver, filter, requiredPermission,
+     *                  userId, flags)                                  // API 33+
+     * </pre>
+     * Taking the first int after the receiver would land on {@code userId}.
+     */
+    private static int indexOfFlags(Object[] args) {
+        for (int i = args.length - 1; i >= 0; i--) {
+            if (args[i] instanceof Integer) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     @ProxyMethod("grantUriPermission")
