@@ -1,8 +1,9 @@
 apply plugin: 'com.android.library'
 
 android {
-    compileSdkVersion 28
-    buildToolsVersion "28.0.2"
+    namespace 'top.niunaijun.blackbox'
+    compileSdk rootProject.ext.compileSdkVersion
+    buildToolsVersion rootProject.ext.buildToolsVersion
 
     defaultConfig {
         minSdkVersion 21
@@ -13,7 +14,14 @@ android {
         consumerProguardFiles "consumer-rules.pro"
         ndk {
             // 设置支持的SO库架构
-            abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86'
+            // x86 is excluded on purpose:
+            //  * Utils/fake_dlfcn.cpp only implements the 32-bit and aarch64 ELF layouts
+            //    (its x86_64 branch is a hard #error).
+            //  * pine's x86 trampoline is incomplete upstream: Extras::CloneAndUnlock()
+            //    calls ReleaseLock(), which is only compiled for __arm__/__aarch64__.
+            // The project ships separate 32/64-bit ARM variants, so this matches
+            // what was actually supported before.
+            abiFilters 'armeabi-v7a', 'arm64-v8a'
         }
     }
 
@@ -28,46 +36,38 @@ android {
             path file('./src/main/cpp/CMakeLists.txt')
         }
     }
-    dexOptions {
-        preDexLibraries false
-        maxProcessCount 8
-        javaMaxHeapSize "4g"
+    buildFeatures {
+        // The library reads BuildConfig nowhere, but the SDK/AGP combination
+        // still requires the class for R/BuildConfig generation parity.
+        buildConfig true
+        aidl true
     }
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
     }
-    aaptOptions {
-        cruncherEnabled = false
-        useNewCruncher = false
-    }
-    testOptions {
-        unitTests.returnDefaultValues = true
-    }
-    lintOptions {
+    lint {
         checkReleaseBuilds false
         abortOnError false
         warningsAsErrors false
         disable "UnusedResources", 'RestrictedApi'
-        textOutput "stdout"
-        textReport false
-        check 'NewApi', 'InlinedApi'
+    }
+    testOptions {
+        unitTests.returnDefaultValues = true
     }
 }
 
-
-tasks.withType(Javadoc) {
-    options.addStringOption('Xdoclint:none', '-quiet')
-    options.addStringOption('encoding', 'UTF-8')
-    options.addStringOption('charSet', 'UTF-8')
-}
-
-
 dependencies {
     implementation fileTree(dir: "libs", include: ["*.jar", "*.aar"])
-    implementation 'androidx.appcompat:appcompat:1.2.0'
+    implementation 'androidx.appcompat:appcompat:1.6.1'
 
     implementation 'me.weishu:free_reflection:3.0.1'
+    // Hidden API exemption. Android 9+ blocks reflective access to non-SDK
+    // framework members unless the calling platform enforces a light/grey list
+    // policy. BlackBox reaches into ActivityThread$H, ActivityClientRecord,
+    // LoadedApk and friends from *every* process (host, :black and the virtual
+    // app processes), which is only possible with exemptions installed.
+    implementation 'org.lsposed.hiddenapibypass:hiddenapibypass:6.1'
     implementation "com.github.CodingGay.BlackReflection:core:$rootProject.ext.blackReflection"
     implementation project(':Bcore:black-fake')
     implementation project(':Bcore:black-hook')

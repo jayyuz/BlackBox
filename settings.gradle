@@ -1,3 +1,21 @@
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+dependencyResolutionManagement {
+    // Repositories are still declared per-module in the root build.gradle for
+    // backwards compatibility with older plugin behaviour.
+    repositoriesMode.set(RepositoriesMode.PREFER_PROJECT)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
 include ':Bcore'
 include ':app'
 include ':Bcore:black-fake'

@@ -10,7 +10,7 @@
 BlackBox is a virtual engine, it can clone and run virtual application on Android,  users don't have to install APK file to run the application on devices. BlackBox control all virtual applications, so you can do anything you want by using BlackBox.
 
 ## Support
-Currently we don't consider supporting Android 4.x, it supports Android 5.0 ～ 12.0.
+Currently we don't consider supporting Android 4.x, it supports Android 5.0 ～ 16.0.
 
 If conditions permit, downgrade targetSdkVersion to 28 or below for better compatibility.
 

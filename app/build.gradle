@@ -4,8 +4,9 @@ plugins {
 }
 
 android {
-    compileSdkVersion 29
-    buildToolsVersion "29.0.2"
+    namespace 'top.niunaijun.blackboxa'
+    compileSdk rootProject.ext.compileSdkVersion
+    buildToolsVersion rootProject.ext.buildToolsVersion
 
     defaultConfig {
         applicationId "top.niunaijun.blackboxa"
@@ -19,6 +20,7 @@ android {
 
     productFlavors {
         BlackBox32 {
+            dimension "BlackBox32"
             applicationId "top.niunaijun.blackboxa32"
             ndk {
                 abiFilters "armeabi-v7a"
@@ -29,6 +31,7 @@ android {
         }
 
         BlackBox64 {
+            dimension "BlackBox32"
             applicationId "top.niunaijun.blackboxa64"
             ndk {
                 abiFilters "arm64-v8a"
@@ -39,6 +42,7 @@ android {
         }
 
         BlackBox32Beta {
+            dimension "BlackBox32"
             applicationId "top.niunaijun.blackboxa32_beta"
             ndk {
                 abiFilters "armeabi-v7a"
@@ -49,6 +53,7 @@ android {
         }
 
         BlackBox64Beta {
+            dimension "BlackBox32"
             applicationId "top.niunaijun.blackboxa64_beta"
             ndk {
                 abiFilters "arm64-v8a"
@@ -75,40 +80,30 @@ android {
 
     buildFeatures {
         viewBinding true
+        buildConfig true
     }
 
     kotlinOptions {
-        jvmTarget = '1.8'
+        jvmTarget = '17'
     }
-    dexOptions {
-        preDexLibraries false
-        maxProcessCount 8
-        javaMaxHeapSize "4g"
-    }
+
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
     }
-    aaptOptions {
-        cruncherEnabled = false
-        useNewCruncher = false
-    }
-    testOptions {
-        unitTests.returnDefaultValues = true
-    }
-    lintOptions {
+
+    lint {
         checkReleaseBuilds false
         abortOnError false
         warningsAsErrors false
         disable "UnusedResources", 'RestrictedApi'
-        textOutput "stdout"
-        textReport false
-        check 'NewApi', 'InlinedApi'
+    }
+    testOptions {
+        unitTests.returnDefaultValues = true
     }
 }
 
-
-tasks.withType(Javadoc) {
+tasks.withType(Javadoc).configureEach {
     options.addStringOption('Xdoclint:none', '-quiet')
     options.addStringOption('encoding', 'UTF-8')
     options.addStringOption('charSet', 'UTF-8')
@@ -126,23 +121,23 @@ dependencies {
     implementation project(':Bcore')
 
     //android
-    implementation 'com.google.android.material:material:1.3.0'
-    implementation 'androidx.core:core-ktx:1.3.2'
-    implementation 'androidx.appcompat:appcompat:1.3.0-rc01'
-    implementation 'androidx.constraintlayout:constraintlayout:2.0.4'
-    implementation "androidx.recyclerview:recyclerview:1.2.0"
+    implementation 'com.google.android.material:material:1.11.0'
+    implementation 'androidx.core:core-ktx:1.12.0'
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+    implementation "androidx.recyclerview:recyclerview:1.3.2"
     implementation 'androidx.viewpager2:viewpager2:1.0.0'
-    implementation "androidx.activity:activity-ktx:1.2.2"
-    implementation "androidx.fragment:fragment-ktx:1.3.3"
-    implementation "androidx.preference:preference-ktx:1.1.1"
+    implementation "androidx.activity:activity-ktx:1.8.2"
+    implementation "androidx.fragment:fragment-ktx:1.6.2"
+    implementation "androidx.preference:preference-ktx:1.2.1"
 
     //coroutines
-    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.4.2"
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3"
 
     //viewModel liveData  lifecycle
-    implementation "androidx.lifecycle:lifecycle-viewmodel-ktx:2.3.1"
-    implementation "androidx.lifecycle:lifecycle-livedata-ktx:2.3.1"
-    implementation "androidx.lifecycle:lifecycle-runtime-ktx:2.3.1"
+    implementation "androidx.lifecycle:lifecycle-viewmodel-ktx:2.7.0"
+    implementation "androidx.lifecycle:lifecycle-livedata-ktx:2.7.0"
+    implementation "androidx.lifecycle:lifecycle-runtime-ktx:2.7.0"
 
 
     //third
@@ -152,10 +147,11 @@ dependencies {
     implementation 'com.afollestad.material-dialogs:core:3.3.0'
     implementation 'com.afollestad.material-dialogs:input:3.3.0'
     //dialog
-    implementation 'com.github.nukc.stateview:kotlin:2.2.0'
+    implementation 'com.github.nukc:StateView:2.2.0'
     //状态控制控件
-    implementation 'com.roger.catloadinglibrary:catloadinglibrary:1.0.9'
-    //加载dialog
+    // 原 jcenter 上的 com.roger.catloadinglibrary / com.imuxuan.floatingview 已随
+    // jcenter 下线而消失，改用本地替代实现（见 view/base/CatLoadingDialog 与
+    // app/rocker/FloatingViewCompat），避免依赖已死仓库。
     implementation 'com.github.Ferfalk:SimpleSearchView:0.2.0'
     //searchView
     implementation 'com.github.Othershe:CornerLabelView:1.0.0'
@@ -165,7 +161,4 @@ dependencies {
     implementation 'org.osmdroid:osmdroid-android:6.1.11'
     //adapter
     implementation 'com.gitee.cbfg5210:RVAdapter:0.3.7'
-
-    //悬浮窗
-    implementation 'com.imuxuan:floatingview:1.6'
 }

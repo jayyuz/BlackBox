@@ -3,11 +3,15 @@ plugins {
 }
 
 android {
-    compileSdkVersion rootProject.ext.compileSdkVersion
+    namespace 'top.niunaijun.android_mirror'
+    compileSdk rootProject.ext.compileSdkVersion
     buildToolsVersion rootProject.ext.buildToolsVersion
 
-    aidlPackageWhiteList "android/app/IServiceConnection.aidl"
-    aidlPackageWhiteList "android/accounts/IAccountManagerResponse.aidl"
+    // Hidden framework AIDL files that the reflection layer needs in order to
+    // call into system_server. Listed explicitly because they are not part of
+    // the public SDK aidl set.
+    aidlPackagedList "android/app/IServiceConnection.aidl"
+    aidlPackagedList "android/accounts/IAccountManagerResponse.aidl"
 
     defaultConfig {
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
@@ -20,14 +24,17 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
+    buildFeatures {
+        aidl true
+    }
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
     }
 }
 
 dependencies {
-    implementation 'androidx.appcompat:appcompat:1.2.0'
+    implementation 'androidx.appcompat:appcompat:1.6.1'
     implementation project(':Bcore:black-fake')
     implementation "com.github.CodingGay.BlackReflection:core:$rootProject.ext.blackReflection"
     annotationProcessor "com.github.CodingGay.BlackReflection:compiler:$rootProject.ext.blackReflection"

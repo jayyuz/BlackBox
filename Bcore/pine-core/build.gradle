@@ -1,11 +1,14 @@
-apply plugin: 'com.android.library'
+plugins {
+    id 'com.android.library'
+}
 
 android {
-    compileSdkVersion rootProject.ext.compileSdkVersion
+    namespace 'top.canyie.pine'
+    compileSdk rootProject.ext.compileSdkVersion
     buildToolsVersion rootProject.ext.buildToolsVersion
 
     defaultConfig {
-        minSdkVersion 19
+        minSdkVersion 21
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
         versionName "1.0"
@@ -36,28 +39,8 @@ android {
             path "src/main/cpp/CMakeLists.txt"
         }
     }
-
-    buildFeatures {
-        // prefab true
-    }
 }
 
 dependencies {
     implementation fileTree(dir: 'libs', include: ['*.jar'])
-    // implementation 'dev.rikka.ndk.thirdparty:cxx:1.1.0'
 }
-
-/*
-apply plugin: 'com.novoda.bintray-release'
-
-publish {
-    userOrg = rootProject.userOrg
-    repoName = rootProject.repoName
-    groupId = rootProject.groupId
-    artifactId = 'core'
-    publishVersion = '0.2.5'
-    desc = 'pine hook core library'
-    licences = rootProject.licences
-    website = rootProject.website
-}
- */
