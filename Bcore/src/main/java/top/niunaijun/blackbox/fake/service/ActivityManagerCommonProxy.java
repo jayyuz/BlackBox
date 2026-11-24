@@ -34,6 +34,13 @@ import static android.content.pm.PackageManager.GET_META_DATA;
 public class ActivityManagerCommonProxy {
     public static final String TAG = "CommonStub";
 
+    // PackageManager.ACTION_REQUEST_PERMISSIONS / EXTRA_REQUEST_PERMISSIONS_NAMES
+    // are @hide, so their values are inlined here.
+    private static final String REQUEST_PERMISSIONS_ACTION =
+            "android.content.pm.action.REQUEST_PERMISSIONS";
+    private static final String EXTRA_REQUEST_PERMISSIONS_NAMES =
+            "android.content.pm.extra.REQUEST_PERMISSIONS_NAMES";
+
     @ProxyMethod("startActivity")
     public static class StartActivity extends MethodHook {
         @Override
@@ -44,6 +51,13 @@ public class ActivityManagerCommonProxy {
             assert intent != null;
             if (intent.getParcelableExtra("_B_|_target_") != null) {
                 return method.invoke(who, args);
+            }
+            // The system permission dialog. Remember which permissions this guest
+            // asked for, so the virtual permission model can later accept the
+            // host's grant as the answer *for this guest* instead of silently
+            // inheriting every host permission.
+            if (REQUEST_PERMISSIONS_ACTION.equals(intent.getAction())) {
+                recordRequestedPermissions(intent);
             }
             if (ComponentUtils.isRequestInstall(intent)) {
                 File file = FileProviderHandler.convertFile(BActivityThread.getApplication(), intent.getData());
@@ -95,8 +109,30 @@ public class ActivityManagerCommonProxy {
             return 0;
         }
 
-        private Intent getIntent(Object[] args) {
-            int index;
+        /**
+     * Records the permissions a guest asked for via the system dialog.
+     *
+     * <p>{@code Activity#requestPermissions} builds an
+     * ACTION_REQUEST_PERMISSIONS intent carrying
+     * {@code EXTRA_REQUEST_PERMISSIONS_NAMES}. Persisting those names is what
+     * lets {@code BPackageManagerService} distinguish "the user approved this
+     * for this guest" from "the host happens to hold it".
+     */
+    private static void recordRequestedPermissions(Intent intent) {
+        String[] names = intent.getStringArrayExtra(EXTRA_REQUEST_PERMISSIONS_NAMES);
+        String packageName = BActivityThread.getAppPackageName();
+        if (names == null || names.length == 0 || packageName == null) {
+            return;
+        }
+        try {
+            BlackBoxCore.getBPackageManager()
+                    .recordRequestedPermissions(packageName, names, BActivityThread.getUserId());
+        } catch (Throwable e) {
+            Slog.w(TAG, "recordRequestedPermissions failed", e);
+        }
+    }
+
+    private Intent getIntent(Object[] args) {            int index;
             if (BuildCompat.isR()) {
                 index = 3;
             } else {

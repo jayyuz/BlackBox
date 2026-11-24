@@ -55,13 +55,16 @@ public class BXposedManagerService extends IBXposedManagerService.Stub implement
     @Override
     public boolean isXPEnable() {
         synchronized (mLock) {
-            return mXposedConfig.enable;
+            return mXposedConfig != null && mXposedConfig.enable;
         }
     }
 
     @Override
     public void setXPEnable(boolean enable) {
         synchronized (mLock) {
+            if (mXposedConfig == null) {
+                mXposedConfig = new XposedConfig();
+            }
             mXposedConfig.enable = enable;
             saveModuleStateLw();
         }
@@ -70,6 +73,9 @@ public class BXposedManagerService extends IBXposedManagerService.Stub implement
     @Override
     public boolean isModuleEnable(String packageName) {
         synchronized (mLock) {
+            if (mXposedConfig == null || mXposedConfig.moduleState == null) {
+                return false;
+            }
             Boolean enable = mXposedConfig.moduleState.get(packageName);
             return enable != null && enable;
         }
@@ -78,8 +84,11 @@ public class BXposedManagerService extends IBXposedManagerService.Stub implement
     @Override
     public void setModuleEnable(String packageName, boolean enable) {
         synchronized (mLock) {
-            if (!mPms.isInstalled(packageName, BUserHandle.USER_XPOSED)) {
+            if (mPms == null || !mPms.isInstalled(packageName, BUserHandle.USER_XPOSED)) {
                 return;
+            }
+            if (mXposedConfig == null) {
+                mXposedConfig = new XposedConfig();
             }
             mXposedConfig.moduleState.put(packageName, enable);
             saveModuleStateLw();
@@ -108,8 +117,8 @@ public class BXposedManagerService extends IBXposedManagerService.Stub implement
 
     private void loadModuleStateLr() {
         File xpModuleConf = BEnvironment.getXPModuleConf();
+        mXposedConfig = new XposedConfig();
         if (!xpModuleConf.exists()) {
-            mXposedConfig = new XposedConfig();
             saveModuleStateLw();
             return;
         }
@@ -118,6 +127,9 @@ public class BXposedManagerService extends IBXposedManagerService.Stub implement
             parcel = FileUtils.readToParcel(xpModuleConf);
             mXposedConfig = new XposedConfig(parcel);
         } catch (Exception e) {
+            // Keep the empty config created above: leaving the field null made every
+            // isXPEnable()/isModuleEnable() caller crash, including the per-user
+            // state lookup used while building PackageInfo.
             e.printStackTrace();
         } finally {
             if (parcel != null) {
@@ -131,6 +143,9 @@ public class BXposedManagerService extends IBXposedManagerService.Stub implement
         AtomicFile atomicFile = new AtomicFile(BEnvironment.getXPModuleConf());
         FileOutputStream fileOutputStream = null;
         try {
+            if (mXposedConfig == null) {
+                mXposedConfig = new XposedConfig();
+            }
             mXposedConfig.writeToParcel(parcel, 0);
             parcel.setDataPosition(0);
             fileOutputStream = atomicFile.startWrite();

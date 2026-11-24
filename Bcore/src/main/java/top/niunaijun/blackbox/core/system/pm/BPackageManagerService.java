@@ -29,6 +29,7 @@ import java.util.Objects;
 import java.util.UUID;
 
 import top.niunaijun.blackbox.BlackBoxCore;
+import top.niunaijun.blackbox.app.BActivityThread;
 import top.niunaijun.blackbox.core.GmsCore;
 import top.niunaijun.blackbox.core.env.BEnvironment;
 import top.niunaijun.blackbox.core.system.BProcessManagerService;
@@ -78,8 +79,15 @@ public class BPackageManagerService extends IBPackageManagerService.Stub impleme
         filter.addAction("android.intent.action.PACKAGE_ADDED");
         filter.addAction("android.intent.action.PACKAGE_REMOVED");
         filter.addDataScheme("package");
-        BlackBoxCore.getContext()
-                .registerReceiver(mPackageChangedHandler, filter);
+        // Android 14 requires an explicit exported flag on runtime receivers.
+        // This filter only matches system package broadcasts and the receiver
+        // is not reachable from other apps' intents, so NOT_EXPORTED is correct.
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            BlackBoxCore.getContext().registerReceiver(mPackageChangedHandler, filter,
+                    Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            BlackBoxCore.getContext().registerReceiver(mPackageChangedHandler, filter);
+        }
     }
 
     private final BroadcastReceiver mPackageChangedHandler = new BroadcastReceiver() {
@@ -806,6 +814,117 @@ public class BPackageManagerService extends IBPackageManagerService.Stub impleme
 
     public BPackageSettings getBPackageSetting(String packageName) {
         return mPackages.get(packageName);
+    }
+
+    /**
+     * The core of the virtual permission model.
+     *
+     * <p>A permission is granted to a virtual app when either:
+     * <ul>
+     *   <li>it is an install-time permission (normal / signature / privileged)
+     *       implied by the guest manifest, or</li>
+     *   <li>the user granted it at runtime for that package + user, which we
+     *       persist in {@link BPackageUserState}.</li>
+     * </ul>
+     *
+     * <p>Fallbacks that keep existing behaviour working:
+     * <ul>
+     *   <li>a permission the guest never declared is granted when the HOST holds
+     *       it - this is what makes shared system components (webview, GMS,
+     *       keyboards) usable from inside the container;</li>
+     *   <li>permissions the container itself needs to operate on behalf of the
+     *       guest (accounts, SMS) stay granted as before.</li>
+     * </ul>
+     */
+    public int checkPermission(String permission, boolean hostGranted, int userId) {
+        // IMPORTANT: this runs in the :black server process, where
+        // BActivityThread.getAppPackageName() is null (that state lives in the
+        // *guest* process). The caller therefore passes the package name in.
+        return checkPermission(permission, hostGranted, userId, null);
+    }
+
+    public int checkPermission(String permission, boolean hostGranted, int userId, String guestPackage) {
+        String packageName = guestPackage != null
+                ? guestPackage
+                : BActivityThread.getAppPackageName();
+        if (packageName == null) {
+            return PackageManager.PERMISSION_DENIED;
+        }
+        BPackageSettings settings = mPackages.get(packageName);
+        if (settings == null || settings.pkg == null) {
+            return PackageManager.PERMISSION_DENIED;
+        }
+
+        // The guest does not declare this permission at all: let the host answer.
+        // Shared components (com.google.android.webview, GMS, IMEs, ...) rely on
+        // this, and it matches how a real device behaves for platform services.
+        if (!settings.pkg.requestedPermissions.contains(permission)) {
+            return hostGranted ? PackageManager.PERMISSION_GRANTED
+                    : PackageManager.PERMISSION_DENIED;
+        }
+
+        BPackageUserState state = settings.readUserState(userId);
+        if (state != null && state.isGranted(permission)) {
+            return PackageManager.PERMISSION_GRANTED;
+        }
+
+        // The runtime dialog is owned by the real PermissionController and grants
+        // to the HOST (a guest has no uid of its own), so no grantRuntimePermission
+        // callback ever reaches this process. If the host holds the permission, the
+        // user has approved it on this device - accept that for the guest and
+        // remember it. The guest can only reach this branch for permissions it
+        // declared in its own manifest (checked above), so this does not hand out
+        // anything the guest did not ask for.
+        if (hostGranted) {
+            settings.modifyUserState(userId).grant(permission);
+            settings.save();
+            return PackageManager.PERMISSION_GRANTED;
+        }
+
+        return PackageManager.PERMISSION_DENIED;
+    }
+
+    public void grantRuntimePermission(String packageName, String permission, int userId) {
+        BPackageSettings settings = mPackages.get(packageName);
+        if (settings == null) {
+            return;
+        }
+        // Must use the live state: readUserState() returns a copy whose
+        // mutations are discarded on save.
+        settings.modifyUserState(userId).grant(permission);
+        settings.save();
+        Slog.d(TAG, "grantRuntimePermission " + packageName + " <- " + permission);
+    }
+
+    public void revokeRuntimePermission(String packageName, String permission, int userId) {
+        BPackageSettings settings = mPackages.get(packageName);
+        if (settings == null) {
+            return;
+        }
+        settings.modifyUserState(userId).deny(permission);
+        settings.save();
+        Slog.d(TAG, "revokeRuntimePermission " + packageName + " -> " + permission);
+    }
+
+    /**
+     * Marks permissions as "asked for" by the guest. See
+     * {@link BPackageUserState#requestedPermissions} for why this matters.
+     */
+    public void recordRequestedPermissions(String packageName, String[] permissions, int userId) {
+        BPackageSettings settings = mPackages.get(packageName);
+        if (settings == null || permissions == null || permissions.length == 0) {
+            return;
+        }
+        BPackageUserState state = settings.modifyUserState(userId);
+        boolean changed = false;
+        for (String permission : permissions) {
+            if (permission != null) {
+                changed |= state.requestedPermissions.add(permission);
+            }
+        }
+        if (changed) {
+            settings.save();
+        }
     }
 
     public List<BPackageSettings> getBPackageSettings() {

@@ -287,6 +287,29 @@ public class IActivityManagerProxy extends ClassInvocationStub {
         }
     }
 
+    /**
+     * Android 13 (API 33) added bindServiceInstance(). Since then
+     * {@code ContextImpl#bindServiceCommon} always calls *this* method instead of
+     * bindService(), so without a hook here a virtual app's bindService went
+     * straight to the real system_server and failed with
+     * "SecurityException: Not allowed to bind to service ...".
+     *
+     * Signature: (caller, token, service, resolvedType, connection, flags,
+     *             instanceName, callingPackage, userId)
+     * service/connection keep the same indices as BindService, so it is reused.
+     */
+    @ProxyMethod("bindServiceInstance")
+    public static class BindServiceInstance extends BindService {
+        @Override
+        protected Object beforeHook(Object who, Method method, Object[] args) throws Throwable {
+            // instanceName: virtual apps do not support service instances.
+            if (args.length > 6) {
+                args[6] = null;
+            }
+            return super.beforeHook(who, method, args);
+        }
+    }
+
     @ProxyMethod("unbindService")
     public static class UnbindService extends MethodHook {
 
@@ -578,16 +601,56 @@ public class IActivityManagerProxy extends ClassInvocationStub {
 
     @ProxyMethod("checkPermission")
     public static class checkPermission extends MethodHook {
+        static int indexOfUid(Object[] args) {
+            if (args == null) {
+                return -1;
+            }
+            int seen = 0;
+            for (int i = 0; i < args.length; i++) {
+                if (args[i] instanceof Integer) {
+                    seen++;
+                    if (seen == 2) {
+                        return i;
+                    }
+                }
+            }
+            return -1;
+        }
+
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
-            MethodParameterUtils.replaceLastUid(args);
             String permission = (String) args[0];
-            if (permission.equals(Manifest.permission.ACCOUNT_MANAGER)
-                    || permission.equals(Manifest.permission.SEND_SMS)) {
-                return PackageManager.PERMISSION_GRANTED;
+            if (permission == null || BActivityThread.getAppPackageName() == null) {
+                return method.invoke(who, args);
             }
-            return method.invoke(who, args);
+
+            int uidIndex = indexOfUid(args);
+            if (uidIndex != -1) {
+                args[uidIndex] = BlackBoxCore.getHostUid();
+            }
+            boolean hostGranted = false;
+            try {
+                Object host = method.invoke(who, args);
+                hostGranted = Integer.valueOf(PackageManager.PERMISSION_GRANTED).equals(host);
+            } catch (Throwable ignored) {
+            }
+
+            int verdict = BlackBoxCore.getBPackageManager()
+                    .checkPermission(permission, hostGranted, BActivityThread.getUserId());
+            return verdict;
         }
+    }
+
+    /**
+     * Android 13+/14 variant used by {@code Context#checkSelfPermission} on
+     * multi-display capable builds. Same decision logic as
+     * {@link checkPermission}; without it QQ (which calls this overload, not
+     * checkPermission) always saw the HOST's answer.
+     *
+     * Signature: (permission, pid, uid, deviceId)
+     */
+    @ProxyMethod("checkPermissionForDevice")
+    public static class CheckPermissionForDevice extends checkPermission {
     }
 
     @ProxyMethod("checkUriPermission")

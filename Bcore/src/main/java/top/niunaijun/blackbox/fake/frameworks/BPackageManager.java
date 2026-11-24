@@ -64,10 +64,27 @@ public class BPackageManager extends BlackManager<IBPackageManagerService> {
         if (ris == null || ris.size() <= 0) {
             return null;
         }
+        // Prefer the first enabled candidate. Disabled components are filtered by
+        // the resolver already, but the list order still comes from the manifest,
+        // and some apps declare several LAUNCHER entries (F-Droid's PanicKit
+        // "Calculator" disguise is one of them).
+        ResolveInfo launch = null;
+        for (ResolveInfo ri : ris) {
+            if (ri.activityInfo == null) {
+                continue;
+            }
+            if (ri.activityInfo.enabled) {
+                launch = ri;
+                break;
+            }
+        }
+        if (launch == null) {
+            launch = ris.get(0);
+        }
         Intent intent = new Intent(intentToResolve);
         intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        intent.setClassName(ris.get(0).activityInfo.packageName,
-                ris.get(0).activityInfo.name);
+        intent.setClassName(launch.activityInfo.packageName,
+                launch.activityInfo.name);
         return intent;
     }
 
@@ -272,6 +289,42 @@ public class BPackageManager extends BlackManager<IBPackageManagerService> {
             e.printStackTrace();
         }
         return new String[]{};
+    }
+
+    public int checkPermission(String permission, boolean hostGranted, int userId) {
+        try {
+            // The service lives in the :black process and cannot see the guest's
+            // package name, so it must be passed explicitly.
+            return getService().checkPermission(permission, hostGranted, userId,
+                    BActivityThread.getAppPackageName());
+        } catch (RemoteException e) {
+            e.printStackTrace();
+        }
+        return android.content.pm.PackageManager.PERMISSION_DENIED;
+    }
+
+    public void grantRuntimePermission(String packageName, String permission, int userId) {
+        try {
+            getService().grantRuntimePermission(packageName, permission, userId);
+        } catch (RemoteException e) {
+            e.printStackTrace();
+        }
+    }
+
+    public void revokeRuntimePermission(String packageName, String permission, int userId) {
+        try {
+            getService().revokeRuntimePermission(packageName, permission, userId);
+        } catch (RemoteException e) {
+            e.printStackTrace();
+        }
+    }
+
+    public void recordRequestedPermissions(String packageName, String[] permissions, int userId) {
+        try {
+            getService().recordRequestedPermissions(packageName, permissions, userId);
+        } catch (RemoteException e) {
+            e.printStackTrace();
+        }
     }
 
     private void crash(Throwable e) {
