@@ -34,29 +34,52 @@ open class BaseActivity : AppCompatActivity() {
     }
 
     /**
-     * Applies the system bar insets to [root] as padding.
+     * Applies system bar insets so the toolbar itself reaches into the status bar.
      *
-     * Call this right after setContentView(). The listener keeps working when the
-     * insets change (rotation, IME, cutout) and consumes nothing, so children that
-     * request their own insets still receive the dispatch.
+     * Call this right after setContentView().
+     *
+     * Padding the whole content view instead leaves the status bar showing the
+     * window background, which produces a visible seam between the coloured app
+     * bar and the area behind the clock. Here the top inset becomes toolbar
+     * padding, so the toolbar background continues behind the system icons and
+     * there is nothing to mismatch. Side and bottom insets still go on the root,
+     * because the navigation bar must not be drawn over by list content.
      */
-    protected fun applySystemBarInsets(root: View) {
-        // Padding the layout already declares is preserved; only the system bar
+    protected fun applySystemBarInsets(root: View, toolbar: Toolbar? = null) {
+        // Padding the layouts already declare is preserved; only the system bar
         // sizes are added on top of it.
         val initialLeft = root.paddingLeft
-        val initialTop = root.paddingTop
         val initialRight = root.paddingRight
         val initialBottom = root.paddingBottom
+        val toolbarInitialTop = toolbar?.paddingTop ?: 0
+        val toolbarInitialLeft = toolbar?.paddingLeft ?: 0
+        val toolbarInitialRight = toolbar?.paddingRight ?: 0
+
         ViewCompat.setOnApplyWindowInsetsListener(root) { view, windowInsets ->
             val bars = windowInsets.getInsets(
                 WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
             )
-            view.updatePadding(
-                left = initialLeft + bars.left,
-                top = initialTop + bars.top,
-                right = initialRight + bars.right,
-                bottom = initialBottom + bars.bottom
-            )
+            if (toolbar != null) {
+                // The status bar (height + cutout) is absorbed as toolbar padding.
+                toolbar.updatePadding(
+                    left = toolbarInitialLeft + bars.left,
+                    top = toolbarInitialTop + bars.top,
+                    right = toolbarInitialRight + bars.right
+                )
+                view.updatePadding(
+                    left = initialLeft,
+                    right = initialRight,
+                    bottom = initialBottom + bars.bottom
+                )
+            } else {
+                view.updatePadding(
+                    left = initialLeft + bars.left,
+                    top = bars.top,
+                    right = initialRight + bars.right,
+                    bottom = initialBottom + bars.bottom
+                )
+            }
+            // Not consumed: children that request their own insets still get them.
             windowInsets
         }
         ViewCompat.requestApplyInsets(root)

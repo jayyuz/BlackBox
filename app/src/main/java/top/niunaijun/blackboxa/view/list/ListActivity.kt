@@ -33,7 +33,7 @@ class ListActivity : BaseActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(viewBinding.root)
-        applySystemBarInsets(viewBinding.root)
+        applySystemBarInsets(viewBinding.root, viewBinding.toolbarLayout.toolbar)
 
         initToolbar(viewBinding.toolbarLayout.toolbar, R.string.installed_app, true)
 
