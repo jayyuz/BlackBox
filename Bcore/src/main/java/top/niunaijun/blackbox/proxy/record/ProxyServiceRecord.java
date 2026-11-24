@@ -4,6 +4,7 @@ import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.os.IBinder;
 
+import top.niunaijun.blackbox.app.BActivityThread;
 import top.niunaijun.blackbox.utils.compat.BundleCompat;
 
 /**
@@ -38,9 +39,17 @@ public class ProxyServiceRecord {
     }
 
     public static ProxyServiceRecord create(Intent intent) {
+        if (intent == null) {
+            // The system restarts services with a null Intent (START_STICKY after a
+            // kill). There is nothing to dispatch; reported rather than thrown so the
+            // proxy component does not take the host process down.
+            return new ProxyServiceRecord(null, null, null, BActivityThread.UNKNOWN_USER, 0);
+        }
         Intent target = intent.getParcelableExtra("_B_|_target_");
         ServiceInfo serviceInfo = intent.getParcelableExtra("_B_|_service_info_");
-        int userId = intent.getIntExtra("_B_|_user_id_", 0);
+        // Default to "unknown" rather than 0: a missing extra must not be read as
+        // "the guest lives in virtual user 0".
+        int userId = intent.getIntExtra("_B_|_user_id_", BActivityThread.UNKNOWN_USER);
         int startId = intent.getIntExtra("_B_|_start_id_", 0);
         IBinder token = BundleCompat.getBinder(intent, "_B_|_token_");
         return new ProxyServiceRecord(target, serviceInfo, token, userId, startId);

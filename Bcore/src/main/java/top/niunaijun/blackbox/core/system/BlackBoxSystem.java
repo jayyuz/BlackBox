@@ -91,9 +91,13 @@ public class BlackBoxSystem {
         try {
             InputStream junit = BlackBoxCore.getContext().getAssets().open("junit.jar");
             FileUtils.copyFile(junit, JUNIT_JAR);
+            // These two are loaded as dex by the guest class loader, so they must
+            // not be writable by this process (Android 14 requirement).
+            FileUtils.makeReadOnlyForDex(JUNIT_JAR);
 
             InputStream empty = BlackBoxCore.getContext().getAssets().open("empty.jar");
             FileUtils.copyFile(empty, EMPTY_JAR);
+            FileUtils.makeReadOnlyForDex(EMPTY_JAR);
         } catch (IOException e) {
             e.printStackTrace();
         }

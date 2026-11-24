@@ -21,6 +21,7 @@ import top.niunaijun.blackbox.core.system.ProcessRecord;
 import top.niunaijun.blackbox.core.system.pm.BPackageManagerService;
 import top.niunaijun.blackbox.entity.JobRecord;
 import top.niunaijun.blackbox.proxy.ProxyManifest;
+import top.niunaijun.blackbox.utils.Slog;
 
 /**
  * Created by Milk on 4/2/21.
@@ -31,6 +32,7 @@ import top.niunaijun.blackbox.proxy.ProxyManifest;
  * 此处无Bug
  */
 public class BJobManagerService extends IBJobManagerService.Stub implements ISystemService {
+    private static final String TAG = "BJobManagerService";
     private static final BJobManagerService sService = new BJobManagerService();
 
     // process_jobId
@@ -42,12 +44,25 @@ public class BJobManagerService extends IBJobManagerService.Stub implements ISys
 
     @Override
     public JobInfo schedule(JobInfo info, int userId) throws RemoteException {
+        if (info == null) {
+            // A thrown exception here travels back to the guest as a binder
+            // failure, where callers (androidx.work among them) surface it as a
+            // hard crash inside Application.onCreate(). Report "not scheduled"
+            // with the null return instead.
+            Slog.w(TAG, "schedule: null JobInfo");
+            return null;
+        }
         ComponentName componentName = info.getService();
+        if (componentName == null) {
+            Slog.w(TAG, "schedule: JobInfo has no service component, id=" + info.getId());
+            return null;
+        }
         Intent intent = new Intent();
         intent.setComponent(componentName);
         ResolveInfo resolveInfo = BPackageManagerService.get().resolveService(intent, PackageManager.GET_META_DATA, null, userId);
         if (resolveInfo == null) {
-            return info;
+            Slog.w(TAG, "schedule: unable to resolve " + componentName + " for user " + userId);
+            return null;
         }
         ServiceInfo serviceInfo = resolveInfo.serviceInfo;
         ProcessRecord processRecord = BProcessManagerService.get().findProcessRecord(serviceInfo.packageName, serviceInfo.processName, userId);

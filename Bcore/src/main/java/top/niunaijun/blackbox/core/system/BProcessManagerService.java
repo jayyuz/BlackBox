@@ -71,9 +71,16 @@ public class BProcessManagerService implements ISystemService {
                     if (app.initLock != null) {
                         app.initLock.block();
                     }
-                    if (app.bActivityThread != null) {
+                    if (isProcessAlive(app)) {
                         return app;
                     }
+                    // The record is stale: the guest process died (or was killed)
+                    // without the death recipient firing, so its ActivityThread
+                    // binder is dead and AppConfig no longer matches reality.
+                    // Dropping it here forces a fresh process creation below.
+                    Slog.w(TAG, "startProcessLocked: dropping dead process record " + processName);
+                    bProcess.remove(processName);
+                    mPidsSelfLocked.remove(app);
                 }
                 bpid = getUsingBPidL();
                 Slog.d(TAG, "init bUid = " + buid + ", bPid = " + bpid);
@@ -134,6 +141,30 @@ public class BProcessManagerService implements ISystemService {
                 startProcessLocked(packageName, processName, userId, bpid, callingPid);
             }
         }
+    }
+
+    /**
+     * True when the record still describes a live guest process.
+     *
+     * <p>Checked against the ActivityThread binder as well as the pid: a binder
+     * that is no longer alive means the process died but its death recipient has
+     * not detached it yet, and reusing it would hand out a stale {@link AppConfig}.
+     */
+    private boolean isProcessAlive(ProcessRecord record) {
+        if (record.bActivityThread == null) {
+            return false;
+        }
+        try {
+            IBinder binder = record.bActivityThread.asBinder();
+            if (binder == null || !binder.isBinderAlive()) {
+                return false;
+            }
+        } catch (Throwable e) {
+            return false;
+        }
+        // /proc/<pid> disappearing is enough evidence; a pid of -1 means the
+        // process is still starting, so do not treat that as death.
+        return record.pid <= 0 || new File("/proc/" + record.pid).exists();
     }
 
     private int parseBPid(String stubProcessName) {

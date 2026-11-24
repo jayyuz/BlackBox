@@ -109,6 +109,45 @@ public class FileUtils {
         Runtime.getRuntime().exec(cmd + cmode + " " + path).waitFor();
     }
 
+    /**
+     * Removes the write bits from a file that is going to be loaded as code
+     * (dex/jar/apk).
+     *
+     * <p>Since Android 14, ART refuses to load a dex from a file the loading
+     * process can write to:
+     * <pre>
+     * E/...: Attempt to load writable dex file: /data/user/0/host/blackbox/.../base.apk
+     * </pre>
+     * Every guest apk and every jar we ship lives inside the HOST's private
+     * directory, so it is owned by the host uid and writable by it by default.
+     * The refusal is silent - the class loader simply ends up without the dex -
+     * and surfaces much later as {@code makeApplication() == null}.
+     *
+     * <p>Read-only (0444) keeps the file loadable; nothing in BlackBox writes to
+     * an installed guest apk after {@code CopyExecutor} copied it in place.
+     *
+     * @return true when the file exists and is no longer writable.
+     */
+    public static boolean makeReadOnlyForDex(File file) {
+        if (file == null || !file.exists()) {
+            return false;
+        }
+        if (!file.canWrite()) {
+            return true;
+        }
+        // Keep the read bits as-is and drop every write bit (owner/group/other).
+        int mode = 0444;
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                Os.chmod(file.getAbsolutePath(), mode);
+            } else {
+                chmod(file.getAbsolutePath(), mode);
+            }
+        } catch (Throwable ignored) {
+        }
+        return !file.canWrite();
+    }
+
     public static void createSymlink(String oldPath, String newPath) throws Exception {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             try {

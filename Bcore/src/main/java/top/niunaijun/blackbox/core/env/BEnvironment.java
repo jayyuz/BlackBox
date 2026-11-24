@@ -86,6 +86,11 @@ public class BEnvironment {
         return new File(sVirtualRoot, String.format(Locale.CHINA, "data/user/%d", userId));
     }
 
+    /** Parent of every per-user data directory: {@code blackbox/data/user}. */
+    public static File getDataUserRootDir() {
+        return new File(sVirtualRoot, "data/user");
+    }
+
     public static File getDeDataDir(String packageName, int userId) {
         return new File(sVirtualRoot, String.format(Locale.CHINA, "data/user_de/%d/%s", userId, packageName));
     }

@@ -72,6 +72,7 @@ import top.niunaijun.blackbox.fake.delegate.ContentProviderDelegate;
 import top.niunaijun.blackbox.fake.frameworks.BXposedManager;
 import top.niunaijun.blackbox.fake.hook.HookManager;
 import top.niunaijun.blackbox.fake.service.HCallbackProxy;
+import top.niunaijun.blackbox.utils.FileUtils;
 import top.niunaijun.blackbox.utils.Reflector;
 import top.niunaijun.blackbox.utils.Slog;
 import top.niunaijun.blackbox.utils.compat.ActivityManagerCompat;
@@ -89,6 +90,12 @@ import top.niunaijun.blackbox.utils.compat.StrictModeCompat;
  */
 public class BActivityThread extends IBActivityThread.Stub {
     public static final String TAG = "BActivityThread";
+
+    /**
+     * Sentinel for "user not supplied by the caller": fall back to this process'
+     * AppConfig. A concrete id (including 0) always wins over the process state.
+     */
+    public static final int UNKNOWN_USER = Integer.MIN_VALUE;
 
     private static BActivityThread sBActivityThread;
     private AppBindData mBoundApplication;
@@ -203,8 +210,19 @@ public class BActivityThread extends IBActivityThread.Stub {
     }
 
     public Service createService(ServiceInfo serviceInfo, IBinder token) {
-        if (!BActivityThread.currentActivityThread().isInit()) {
-            BActivityThread.currentActivityThread().bindApplication(serviceInfo.packageName, serviceInfo.processName);
+        return createService(serviceInfo, token, UNKNOWN_USER);
+    }
+
+    /**
+     * @param requestUserId user the service belongs to, taken from the proxy
+     *                      record. Pass {@link #UNKNOWN_USER} to fall back to this
+     *                      process' AppConfig.
+     *                      Relying on the process config alone is what made the
+     *                      lookup silently degrade to user 0 for recycled processes.
+     */
+    public Service createService(ServiceInfo serviceInfo, IBinder token, int requestUserId) {
+        if (!ensureBoundApplication(serviceInfo, requestUserId)) {
+            return null;
         }
         ClassLoader classLoader = BRLoadedApk.get(mBoundApplication.info).getClassLoader();
         Service service;
@@ -242,13 +260,28 @@ public class BActivityThread extends IBActivityThread.Stub {
     }
 
     public JobService createJobService(ServiceInfo serviceInfo) {
-        if (!BActivityThread.currentActivityThread().isInit()) {
-            BActivityThread.currentActivityThread().bindApplication(serviceInfo.packageName, serviceInfo.processName);
+        return createJobService(serviceInfo, UNKNOWN_USER);
+    }
+
+    public JobService createJobService(ServiceInfo serviceInfo, int requestUserId) {
+        if (!ensureBoundApplication(serviceInfo, requestUserId)) {
+            return null;
         }
         ClassLoader classLoader = BRLoadedApk.get(mBoundApplication.info).getClassLoader();
         JobService service;
         try {
-            service = (JobService) classLoader.loadClass(serviceInfo.name).newInstance();
+            Object instance = classLoader.loadClass(serviceInfo.name).newInstance();
+            if (!isJobService(instance)) {
+                // Not a JobService, so the virtual JobManager must not build it.
+                // androidx.work declares plain Services and JobIntentService-based
+                // ones with the same scheduling plumbing; casting those would throw.
+                Slog.w(TAG, "Not a JobService, ignoring: " + serviceInfo.name);
+                return null;
+            }
+            service = (JobService) instance;
+        } catch (ClassNotFoundException e) {
+            Slog.e(TAG, "JobService class not found: " + serviceInfo.name);
+            return null;
         } catch (Exception e) {
             e.printStackTrace();
             Slog.e(TAG, "Unable to create JobService " + serviceInfo.name
@@ -281,20 +314,88 @@ public class BActivityThread extends IBActivityThread.Stub {
         }
     }
 
+    /**
+     * True when the guest class really is an {@code android.app.job.JobService}.
+     *
+     * <p>{@code instanceof} is reliable here even though the guest runs its own
+     * dex: framework classes such as {@code JobService} always resolve through the
+     * boot class loader, so both sides see the same {@code Class} object.
+     *
+     * <p>The declared {@code BIND_JOB_SERVICE} permission is *not* a substitute for
+     * this check: {@code androidx.core.app.JobIntentService} requires that
+     * permission in the manifest but does not extend {@code JobService}, and casting
+     * it would throw a ClassCastException (F-Droid's {@code UpdateService} is
+     * exactly that case).
+     */
+    private static boolean isJobService(Object instance) {
+        return instance instanceof JobService;
+    }
+
     public void bindApplication(final String packageName, final String processName) {
+        bindApplication(packageName, processName, UNKNOWN_USER);
+    }
+
+    /**
+     * Binds the guest Application into this process.
+     *
+     * @param requestUserId user this guest belongs to, from the proxy record, or
+     *                      {@link #UNKNOWN_USER} to use the process' AppConfig.
+     */
+    public void bindApplication(final String packageName, final String processName, final int requestUserId) {
         if (Looper.myLooper() != Looper.getMainLooper()) {
             final ConditionVariable conditionVariable = new ConditionVariable();
             BlackBoxCore.get().getHandler().post(() -> {
-                handleBindApplication(packageName, processName);
+                handleBindApplication(packageName, processName, requestUserId);
                 conditionVariable.open();
             });
             conditionVariable.block();
         } else {
-            handleBindApplication(packageName, processName);
+            handleBindApplication(packageName, processName, requestUserId);
         }
     }
 
     public synchronized void handleBindApplication(String packageName, String processName) {
+        handleBindApplication(packageName, processName, UNKNOWN_USER);
+    }
+
+    /**
+     * Returns true when an Application is bound and usable in this process.
+     *
+     * <p>Failure is reported instead of thrown: a guest that was uninstalled (or
+     * whose settings cannot be read) must fail the single service creation, not
+     * take down the whole host process that hosts the proxy component.
+     */
+    private boolean ensureBoundApplication(ServiceInfo serviceInfo, int requestUserId) {
+        if (isInit()) {
+            return true;
+        }
+        bindApplication(serviceInfo.packageName, serviceInfo.processName, requestUserId);
+        if (!isInit() || mBoundApplication.info == null) {
+            Slog.e(TAG, "bindApplication did not complete for " + serviceInfo.packageName
+                    + "/" + serviceInfo.processName + ", userId=" + resolveUserId(requestUserId));
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Resolves the virtual user for this call. The proxy record is authoritative
+     * because AppConfig may be stale (recycled process) or missing entirely.
+     */
+    private static int resolveUserId(int requestUserId) {
+        if (requestUserId != UNKNOWN_USER) {
+            return requestUserId;
+        }
+        if (getAppConfig() == null) {
+            // No process config at all: nothing better to fall back to. Logged by
+            // the caller, which also reports whether the package is installed.
+            Slog.w(TAG, "resolveUserId: no AppConfig, falling back to user 0");
+            return 0;
+        }
+        return getUserId();
+    }
+
+    public synchronized void handleBindApplication(String packageName, String processName, int requestUserId) {
         if (isInit())
             return;
         try {
@@ -302,7 +403,21 @@ public class BActivityThread extends IBActivityThread.Stub {
         } catch (Throwable ignored) {
         }
 
-        PackageInfo packageInfo = BlackBoxCore.getBPackageManager().getPackageInfo(packageName, PackageManager.GET_PROVIDERS, BActivityThread.getUserId());
+        int userId = resolveUserId(requestUserId);
+        PackageInfo packageInfo = BlackBoxCore.getBPackageManager()
+                .getPackageInfo(packageName, PackageManager.GET_PROVIDERS, userId);
+        if (packageInfo == null || packageInfo.applicationInfo == null) {
+            // Most likely the guest was uninstalled while the proxy was still bound,
+            // or its settings record is unreadable. Log everything needed to tell
+            // those apart and let the caller fail this one operation.
+            Slog.e(TAG, "handleBindApplication: no package info for " + packageName
+                    + ", process=" + processName
+                    + ", requestUserId=" + requestUserId
+                    + ", userId=" + userId
+                    + ", appConfig=" + getAppConfig()
+                    + ", installed=" + BlackBoxCore.getBPackageManager().isInstalled(packageName, userId));
+            return;
+        }
         ApplicationInfo applicationInfo = packageInfo.applicationInfo;
         if (packageInfo.providers == null) {
             packageInfo.providers = new ProviderInfo[]{};
@@ -311,8 +426,22 @@ public class BActivityThread extends IBActivityThread.Stub {
 
         Object boundApplication = BRActivityThread.get(BlackBoxCore.mainThread()).mBoundApplication();
 
+        // Android 14 onwards refuses to load a dex from a file this process can
+        // write to. Guests installed by an older build still carry 0600 on their
+        // base.apk, and the class loader built below is exactly what would be
+        // rejected - silently, leaving makeApplication() with no Application.
+        prepareGuestCodePath(applicationInfo);
+
         Context packageContext = createPackageContext(applicationInfo);
+        if (packageContext == null) {
+            Slog.e(TAG, "handleBindApplication: cannot create package context for " + packageName);
+            return;
+        }
         Object loadedApk = BRContextImpl.get(packageContext).mPackageInfo();
+        if (loadedApk == null) {
+            Slog.e(TAG, "handleBindApplication: no LoadedApk for " + packageName);
+            return;
+        }
         BRLoadedApk.get(loadedApk)._set_mSecurityViolation(false);
         // fix applicationInfo
         BRLoadedApk.get(loadedApk)._set_mApplicationInfo(applicationInfo);
@@ -328,7 +457,7 @@ public class BActivityThread extends IBActivityThread.Stub {
             }
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            WebView.setDataDirectorySuffix(getUserId() + ":" + packageName + ":" + processName);
+            WebView.setDataDirectorySuffix(userId + ":" + packageName + ":" + processName);
         }
 
         VirtualRuntime.setupRuntime(processName, applicationInfo);
@@ -342,6 +471,20 @@ public class BActivityThread extends IBActivityThread.Stub {
         assert packageContext != null;
         IOCore.get().enableRedirect(packageContext);
 
+        // PermissionManager caches checkPermission() results per (permission, uid)
+        // inside this process. A guest has no uid of its own - it runs under the
+        // HOST's uid - so the cache would happily return the host's answer and
+        // never reach our hook. Disabling it forces every check through
+        // IActivityManager/PackageManager, where the virtual permission model
+        // can answer for the guest.
+        // Must run before anything in this process touches permission APIs: on
+        // Android 14 PermissionManager caches checkPermission() per (perm, uid)
+        // inside the process, and a guest shares the host's uid, so a stale
+        // "denied" entry would never come back to our hook.
+        // (BlackBoxCore#doAttachBaseContext already did this as early as possible;
+        // repeat it here because the app process may have populated the cache
+        // between attachBaseContext and bindApplication.)
+        BlackBoxCore.get().disablePermissionCacheEarly();
         AppBindData bindData = new AppBindData();
         bindData.appInfo = applicationInfo;
         bindData.processName = processName;
@@ -366,6 +509,18 @@ public class BActivityThread extends IBActivityThread.Stub {
         try {
             onBeforeCreateApplication(packageName, processName, packageContext);
             application = BRLoadedApk.get(loadedApk).makeApplication(false, null);
+            if (application == null) {
+                // makeApplication() returns null when the class loader could not
+                // provide the Application: the apk failed to load (on Android 14
+                // typically because the file was writable), or the manifest names a
+                // missing class. Continuing would NPE in callApplicationOnCreate,
+                // so report the real cause instead.
+                Slog.e(TAG, "makeApplication returned null for " + packageName
+                        + ", sourceDir=" + applicationInfo.sourceDir
+                        + ", writable=" + (applicationInfo.sourceDir != null
+                        && new File(applicationInfo.sourceDir).canWrite()));
+                return;
+            }
             mInitialApplication = application;
             BRActivityThread.get(BlackBoxCore.mainThread())._set_mInitialApplication(mInitialApplication);
             ContextCompat.fix((Context) BRActivityThread.get(BlackBoxCore.mainThread()).getSystemContext());
@@ -380,6 +535,36 @@ public class BActivityThread extends IBActivityThread.Stub {
         } catch (Exception e) {
             e.printStackTrace();
             throw new RuntimeException("Unable to makeApplication", e);
+        }
+    }
+
+    /**
+     * Makes the guest's code paths loadable by ART.
+     *
+     * <p>Android 14 rejects dex loading from files the loading process can write
+     * to ("Attempt to load writable dex file: ..."). Everything BlackBox loads
+     * lives under the HOST's data dir, so it is writable by the host uid unless
+     * we strip the write bits. Installs performed by {@code CopyExecutor} already
+     * do this, but guests installed by earlier builds do not, so the mode is
+     * re-applied here on every bind.
+     */
+    private static void prepareGuestCodePath(ApplicationInfo applicationInfo) {
+        try {
+            if (applicationInfo.sourceDir != null) {
+                FileUtils.makeReadOnlyForDex(new File(applicationInfo.sourceDir));
+            }
+            if (applicationInfo.publicSourceDir != null
+                    && !applicationInfo.publicSourceDir.equals(applicationInfo.sourceDir)) {
+                FileUtils.makeReadOnlyForDex(new File(applicationInfo.publicSourceDir));
+            }
+            String[] splitSourceDirs = applicationInfo.splitSourceDirs;
+            if (splitSourceDirs != null) {
+                for (String splitSourceDir : splitSourceDirs) {
+                    FileUtils.makeReadOnlyForDex(new File(splitSourceDir));
+                }
+            }
+        } catch (Throwable e) {
+            Slog.w(TAG, "prepareGuestCodePath failed for " + applicationInfo.packageName, e);
         }
     }
 
@@ -529,20 +714,60 @@ public class BActivityThread extends IBActivityThread.Stub {
                 newIntent = intent;
             }
             Object mainThread = BlackBoxCore.mainThread();
-            if (BRActivityThread.get(BlackBoxCore.mainThread())._check_performNewIntents(null, null) != null) {
-                BRActivityThread.get(mainThread).performNewIntents(
-                        token,
-                        Collections.singletonList(newIntent)
-                );
+            List<Object> intents = Collections.singletonList((Object) newIntent);
+
+            // Android 12 (API 31) changed handleNewIntent(IBinder, List) to
+            // handleNewIntent(ActivityClientRecord, List). The ActivityClientRecord
+            // is what mActivities is keyed by, so look the token up first.
+            Object clientRecord = BRActivityThread.get(mainThread).mActivities().get(token);
+            if (clientRecord != null && reflectivelyHandleNewIntent(mainThread, clientRecord, intents)) {
+                return;
+            }
+
+            // Android 11 and earlier.
+            if (BRActivityThreadQ.get(mainThread)._check_handleNewIntent(null, null) != null) {
+                BRActivityThreadQ.get(mainThread).handleNewIntent(token, intents);
             } else if (BRActivityThreadNMR1.get(mainThread)._check_performNewIntents(null, null, false) != null) {
-                BRActivityThreadNMR1.get(mainThread).performNewIntents(
-                        token,
-                        Collections.singletonList(newIntent),
-                        true);
-            } else if (BRActivityThreadQ.get(mainThread)._check_handleNewIntent(null, null) != null) {
-                BRActivityThreadQ.get(mainThread).handleNewIntent(token, Collections.singletonList(newIntent));
+                BRActivityThreadNMR1.get(mainThread).performNewIntents(token, intents, true);
+            } else if (BRActivityThread.get(mainThread)._check_performNewIntents(null, null) != null) {
+                BRActivityThread.get(mainThread).performNewIntents(token, intents);
             }
         });
+    }
+
+    /**
+     * Invokes ActivityThread#handleNewIntent(ActivityClientRecord, List) directly.
+     * The mirror declaration types the first argument as Object, which the
+     * BlackReflection generated stub cannot resolve (it looks methods up by
+     * parameter name/type), so plain reflection is used here instead.
+     */
+    private static boolean reflectivelyHandleNewIntent(Object activityThread, Object clientRecord, List<Object> intents) {
+        try {
+            // Pick the 2-arg overload explicitly: ActivityThread has had both
+            // handleNewIntent(IBinder, List) and
+            // handleNewIntent(ActivityClientRecord, List) over the years.
+            Method target = null;
+            for (Method method : activityThread.getClass().getDeclaredMethods()) {
+                if (!"handleNewIntent".equals(method.getName())) {
+                    continue;
+                }
+                Class<?>[] params = method.getParameterTypes();
+                if (params.length == 2 && params[1] == List.class
+                        && params[0].isInstance(clientRecord)) {
+                    target = method;
+                    break;
+                }
+            }
+            if (target == null) {
+                return false;
+            }
+            target.setAccessible(true);
+            target.invoke(activityThread, clientRecord, intents);
+            return true;
+        } catch (Throwable e) {
+            Slog.w(TAG, "handleNewIntent via reflection failed: " + e);
+            return false;
+        }
     }
 
     @Override
@@ -578,8 +803,12 @@ public class BActivityThread extends IBActivityThread.Stub {
         });
     }
 
-    public static Activity getActivityByToken(IBinder token) {
-        Map<IBinder, Object> iBinderObjectMap =
+    /**
+     * Turns off the in-process permission cache so that every
+     * {@code checkSelfPermission()} reaches the virtual permission model.
+     * Best effort: on very old releases the class/method may not exist.
+     */
+    public static Activity getActivityByToken(IBinder token) {        Map<IBinder, Object> iBinderObjectMap =
                 BRActivityThread.get(BlackBoxCore.mainThread()).mActivities();
         return BRActivityThreadActivityClientRecord.get(iBinderObjectMap.get(token)).activity();
     }

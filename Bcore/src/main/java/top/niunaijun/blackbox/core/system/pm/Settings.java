@@ -1,5 +1,6 @@
 package top.niunaijun.blackbox.core.system.pm;
 
+import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.PackageParser;
@@ -54,7 +55,14 @@ import top.niunaijun.blackbox.utils.compat.PackageParserCompat;
         origSettings.pkg.installOption = installOption;
         origSettings.installOption = installOption;
         origSettings.pkg.mExtras = origSettings;
-        origSettings.pkg.applicationInfo = PackageManagerCompat.generateApplicationInfo(origSettings.pkg, 0, BPackageUserState.create(), 0);
+        // Only replace the parsed ApplicationInfo when the regeneration actually
+        // succeeded: assigning null here is what left records without one, and
+        // every PackageInfo built from them was unusable.
+        ApplicationInfo generated = PackageManagerCompat.generateApplicationInfo(
+                origSettings.pkg, 0, BPackageUserState.create(), 0);
+        if (generated != null) {
+            origSettings.pkg.applicationInfo = generated;
+        }
         synchronized (mPackages) {
             pkgSettings = mPackages.get(name);
             if (pkgSettings != null) {
@@ -186,41 +194,129 @@ import top.niunaijun.blackbox.utils.compat.PackageParserCompat;
     private void updatePackageLP(File app) {
         String packageName = app.getName();
         Parcel packageSettingsIn = Parcel.obtain();
-        File packageConf = BEnvironment.getPackageConf(packageName);
         try {
-            byte[] bPackageSettingsBytes = FileUtils.toByteArray(packageConf);
+            byte[] bPackageSettingsBytes = FileUtils.toByteArray(BEnvironment.getPackageConf(packageName));
 
             packageSettingsIn.unmarshall(bPackageSettingsBytes, 0, bPackageSettingsBytes.length);
             packageSettingsIn.setDataPosition(0);
 
             BPackageSettings bPackageSettings = new BPackageSettings(packageSettingsIn);
-            bPackageSettings.pkg.mExtras = bPackageSettings;
-            if (bPackageSettings.installOption.isFlag(InstallOption.FLAG_SYSTEM)) {
-                PackageInfo packageInfo = BlackBoxCore.getPackageManager().getPackageInfo(packageName, PackageManager.GET_META_DATA);
-                String currPackageSourcePath = packageInfo.applicationInfo.sourceDir;
-                if (!currPackageSourcePath.equals(bPackageSettings.pkg.baseCodePath)) {
-                    // update baseCodePath And Re install
-                    BProcessManagerService.get().killAllByPackageName(bPackageSettings.pkg.packageName);
-                    BPackageSettings newPkg = reInstallBySystem(packageInfo, bPackageSettings.installOption);
-                    bPackageSettings.pkg = newPkg.pkg;
-                }
-            } else {
-                bPackageSettings.pkg.applicationInfo = PackageManagerCompat.generateApplicationInfo(bPackageSettings.pkg, 0, BPackageUserState.create(), 0);
-            }
-            bPackageSettings.save();
-            mPackages.put(bPackageSettings.pkg.packageName, bPackageSettings);
+            adoptSettingsLP(packageName, bPackageSettings);
             Slog.d(TAG, "loaded Package: " + packageName);
         } catch (Throwable e) {
-            e.printStackTrace();
-            // bad package
+            // Unreadable settings (format change, truncated write, ...). The APK is
+            // still on disk, so rebuild the record from it instead of deleting the
+            // package: the old code wiped the app dir here, which silently
+            // uninstalled every guest whose conf came from another build and left
+            // later process starts with a package that "does not exist".
+            Slog.e(TAG, "settings unreadable for " + packageName + ", rebuilding from apk", e);
+            BPackageSettings recovered = null;
+            try {
+                recovered = rebuildSettingsLP(packageName);
+                if (recovered != null) {
+                    adoptSettingsLP(packageName, recovered);
+                    Slog.d(TAG, "recovered Package: " + packageName);
+                    return;
+                }
+            } catch (Throwable rebuildError) {
+                Slog.e(TAG, "rebuild failed for " + packageName, rebuildError);
+            }
+            // Rebuild also failed: only now is the package genuinely gone.
+            Slog.e(TAG, "bad Package: " + packageName);
             FileUtils.deleteDir(app);
             removePackage(packageName);
             BProcessManagerService.get().killAllByPackageName(packageName);
             BPackageManagerService.get().onPackageUninstalled(packageName, true, BUserHandle.USER_ALL);
-            Slog.d(TAG, "bad Package: " + packageName);
         } finally {
             packageSettingsIn.recycle();
         }
+    }
+
+    /**
+     * Registers a parsed settings record, repairing fields that a legacy or
+     * partially-written conf may be missing.
+     */
+    private void adoptSettingsLP(String packageName, BPackageSettings bPackageSettings) throws Exception {
+        if (bPackageSettings == null || bPackageSettings.pkg == null) {
+            throw new IllegalStateException("settings has no BPackage: " + packageName);
+        }
+        if (bPackageSettings.installOption == null) {
+            throw new IllegalStateException("settings has no InstallOption: " + packageName);
+        }
+        bPackageSettings.pkg.mExtras = bPackageSettings;
+        if (bPackageSettings.installOption.isFlag(InstallOption.FLAG_SYSTEM)) {
+            PackageInfo packageInfo = BlackBoxCore.getPackageManager().getPackageInfo(packageName, PackageManager.GET_META_DATA);
+            String currPackageSourcePath = packageInfo.applicationInfo.sourceDir;
+            if (!currPackageSourcePath.equals(bPackageSettings.pkg.baseCodePath)) {
+                // update baseCodePath And Re install
+                BProcessManagerService.get().killAllByPackageName(bPackageSettings.pkg.packageName);
+                BPackageSettings newPkg = reInstallBySystem(packageInfo, bPackageSettings.installOption);
+                bPackageSettings.pkg = newPkg.pkg;
+            }
+        } else {
+            // Never persist null here: doing so made every later getPackageInfo()
+            // fail in checkUseInstalledOrHidden and surface as a bind NPE.
+            ApplicationInfo refreshed =
+                    PackageManagerCompat.generateApplicationInfo(bPackageSettings.pkg, 0, BPackageUserState.create(), 0);
+            if (refreshed != null) {
+                bPackageSettings.pkg.applicationInfo = refreshed;
+            } else if (bPackageSettings.pkg.applicationInfo == null) {
+                throw new IllegalStateException("no ApplicationInfo for " + packageName);
+            }
+        }
+        bPackageSettings.save();
+        mPackages.put(bPackageSettings.pkg.packageName, bPackageSettings);
+    }
+
+    /**
+     * Rebuilds a settings record from the installed APK, restoring per-user install
+     * state from the directories that survived on disk.
+     */
+    private BPackageSettings rebuildSettingsLP(String packageName) {
+        String apkPath = null;
+        InstallOption option = null;
+        File stored = BEnvironment.getBaseApkDir(packageName);
+        if (stored.exists()) {
+            apkPath = stored.getAbsolutePath();
+            option = InstallOption.installByStorage();
+        } else {
+            try {
+                ApplicationInfo systemInfo = BlackBoxCore.getPackageManager().getApplicationInfo(packageName, 0);
+                apkPath = systemInfo.sourceDir;
+                option = InstallOption.installBySystem();
+            } catch (PackageManager.NameNotFoundException ignored) {
+            }
+        }
+        if (apkPath == null) {
+            return null;
+        }
+        PackageParser.Package aPackage = parserApk(apkPath);
+        if (aPackage == null) {
+            return null;
+        }
+        if (option.isFlag(InstallOption.FLAG_SYSTEM)) {
+            try {
+                aPackage.applicationInfo = BlackBoxCore.getPackageManager().getPackageInfo(packageName, 0).applicationInfo;
+            } catch (PackageManager.NameNotFoundException e) {
+                return null;
+            }
+        }
+        BPackageSettings settings = getPackageLPw(packageName, aPackage, option);
+        // Users are still "installed" wherever their data directory exists.
+        File[] userDirs = BEnvironment.getDataUserRootDir().listFiles();
+        if (userDirs != null) {
+            for (File userDir : userDirs) {
+                File appData = new File(userDir, packageName);
+                if (!appData.isDirectory()) {
+                    continue;
+                }
+                try {
+                    settings.setInstalled(true, Integer.parseInt(userDir.getName()));
+                } catch (NumberFormatException ignored) {
+                }
+            }
+        }
+        return settings;
     }
 
     private BPackageSettings reInstallBySystem(PackageInfo systemPackageInfo, InstallOption option) throws Exception {

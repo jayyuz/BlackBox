@@ -31,6 +31,7 @@ import top.niunaijun.blackbox.core.env.BEnvironment;
 import top.niunaijun.blackbox.entity.pm.InstallOption;
 import top.niunaijun.blackbox.utils.ArrayUtils;
 import top.niunaijun.blackbox.utils.FileUtils;
+import top.niunaijun.blackbox.utils.Slog;
 import top.niunaijun.blackbox.utils.compat.BuildCompat;
 
 /**
@@ -44,6 +45,8 @@ import top.niunaijun.blackbox.utils.compat.BuildCompat;
 @SuppressLint({"SdCardPath", "NewApi"})
 public class PackageManagerCompat {
 
+    public static final String TAG = "PackageManagerCompat";
+
     public static PackageInfo generatePackageInfo(BPackageSettings ps, int flags, BPackageUserState state, int userId) {
         if (ps == null) {
             return null;
@@ -53,7 +56,12 @@ public class PackageManagerCompat {
             PackageInfo packageInfo = null;
             try {
                 packageInfo = generatePackageInfo(p, flags, 0, 0, state, userId);
-            } catch (Throwable ignored) {
+            } catch (Throwable e) {
+                // Swallowing this silently turned every transient failure into a
+                // "package does not exist" answer, which the caller cannot tell
+                // apart from a real uninstall. Always leave a trace.
+                Slog.e(TAG, "generatePackageInfo failed for " + p.packageName
+                        + ", userId=" + userId + ", flags=" + flags, e);
             }
             return packageInfo;
         }
@@ -61,7 +69,20 @@ public class PackageManagerCompat {
     }
 
     public static PackageInfo generatePackageInfo(BPackage p, int flags, long firstInstallTime, long lastUpdateTime, BPackageUserState state, int userId) {
-        if (!checkUseInstalledOrHidden(flags, state, p.applicationInfo)) {
+        if (p == null || !checkUseInstalledOrHidden(flags, state, p.applicationInfo)) {
+            return null;
+        }
+        if (AppSystemEnv.isBlackPackage(p.packageName)) {
+            return null;
+        }
+
+        ApplicationInfo applicationInfo = generateApplicationInfo(p, flags, state, userId);
+        if (applicationInfo == null) {
+            // A PackageInfo whose applicationInfo is null is a trap: every caller
+            // dereferences it immediately (see BActivityThread#handleBindApplication).
+            // Report the package as unavailable instead of returning a half-built one.
+            Slog.e(TAG, "generatePackageInfo: no ApplicationInfo for " + p.packageName
+                    + ", userId=" + userId + ", baseCodePath=" + p.baseCodePath);
             return null;
         }
 
@@ -71,7 +92,7 @@ public class PackageManagerCompat {
         pi.versionName = p.mVersionName;
         pi.sharedUserId = p.mSharedUserId;
         pi.sharedUserLabel = p.mSharedUserLabel;
-        pi.applicationInfo = generateApplicationInfo(p, flags, state, userId);
+        pi.applicationInfo = applicationInfo;
 
         pi.firstInstallTime = firstInstallTime;
         pi.lastUpdateTime = lastUpdateTime;
@@ -104,7 +125,10 @@ public class PackageManagerCompat {
                 final ActivityInfo[] res = new ActivityInfo[N];
                 for (int i = 0; i < N; i++) {
                     final BPackage.Activity a = p.activities.get(i);
-                    res[num++] = generateActivityInfo(a, flags, state, userId);
+                    ActivityInfo info = generateActivityInfo(a, flags, state, userId);
+                    if (info != null) {
+                        res[num++] = info;
+                    }
                 }
                 pi.activities = ArrayUtils.trimToSize(res, num);
             }
@@ -117,7 +141,10 @@ public class PackageManagerCompat {
                 final ActivityInfo[] res = new ActivityInfo[N];
                 for (int i = 0; i < N; i++) {
                     final BPackage.Activity a = p.receivers.get(i);
-                    res[num++] = generateActivityInfo(a, flags, state, userId);
+                    ActivityInfo info = generateActivityInfo(a, flags, state, userId);
+                    if (info != null) {
+                        res[num++] = info;
+                    }
                 }
                 pi.receivers = ArrayUtils.trimToSize(res, num);
             }
@@ -130,7 +157,10 @@ public class PackageManagerCompat {
                 final ServiceInfo[] res = new ServiceInfo[N];
                 for (int i = 0; i < N; i++) {
                     final BPackage.Service s = p.services.get(i);
-                    res[num++] = generateServiceInfo(s, flags, state, userId);
+                    ServiceInfo info = generateServiceInfo(s, flags, state, userId);
+                    if (info != null) {
+                        res[num++] = info;
+                    }
                 }
                 pi.services = ArrayUtils.trimToSize(res, num);
             }
@@ -179,11 +209,12 @@ public class PackageManagerCompat {
                 for (int i = 0; i < N; i++) {
                     final String perm = p.requestedPermissions.get(i);
                     pi.requestedPermissions[i] = perm;
-                    // The notion of required permissions is deprecated but for compatibility.
-//                    pi.requestedPermissionsFlags[i] |= PackageInfo.REQUESTED_PERMISSION_REQUIRED;
-//                    if (grantedPermissions != null && grantedPermissions.contains(perm)) {
-//                        pi.requestedPermissionsFlags[i] |= PackageInfo.REQUESTED_PERMISSION_GRANTED;
-//                    }
+                    // Bit 1 == REQUESTED_PERMISSION_REQUIRED (still read by apps when
+                    // inspecting their own grants), bit 2 == REQUESTED_PERMISSION_GRANTED.
+                    pi.requestedPermissionsFlags[i] |= 0x00000001;
+                    if (state != null && state.isGranted(perm)) {
+                        pi.requestedPermissionsFlags[i] |= PackageInfo.REQUESTED_PERMISSION_GRANTED;
+                    }
                 }
             }
         }
@@ -214,7 +245,7 @@ public class PackageManagerCompat {
     }
 
     public static ActivityInfo generateActivityInfo(BPackage.Activity a, int flags, BPackageUserState state, int userId) {
-        if (!checkUseInstalledOrHidden(flags, state, a.info.applicationInfo)) {
+        if (a == null || a.info == null || !checkUseInstalledOrHidden(flags, state, a.info.applicationInfo)) {
             return null;
         }
         // Make shallow copies so we can store the metadata safely
@@ -222,11 +253,14 @@ public class PackageManagerCompat {
         ai.metaData = a.metaData;
         ai.processName = BPackageManagerService.fixProcessName(ai.packageName, ai.processName);
         ai.applicationInfo = generateApplicationInfo(a.owner, flags, state, userId);
+        if (ai.applicationInfo == null) {
+            return null;
+        }
         return ai;
     }
 
     public static ServiceInfo generateServiceInfo(BPackage.Service s, int flags, BPackageUserState state, int userId) {
-        if (!checkUseInstalledOrHidden(flags, state, s.info.applicationInfo)) {
+        if (s == null || s.info == null || !checkUseInstalledOrHidden(flags, state, s.info.applicationInfo)) {
             return null;
         }
         // Make shallow copies so we can store the metadata safely
@@ -234,11 +268,14 @@ public class PackageManagerCompat {
         si.metaData = s.metaData;
         si.processName = BPackageManagerService.fixProcessName(si.packageName, si.processName);
         si.applicationInfo = generateApplicationInfo(s.owner, flags, state, userId);
+        if (si.applicationInfo == null) {
+            return null;
+        }
         return si;
     }
 
     public static ProviderInfo generateProviderInfo(BPackage.Provider p, int flags, BPackageUserState state, int userId) {
-        if (!checkUseInstalledOrHidden(flags, state, p.info.applicationInfo)) {
+        if (p == null || p.info == null || !checkUseInstalledOrHidden(flags, state, p.info.applicationInfo)) {
             return null;
         }
         // Make shallow copies so we can store the metadata safely
@@ -251,6 +288,9 @@ public class PackageManagerCompat {
             pi.uriPermissionPatterns = null;
         }
         pi.applicationInfo = generateApplicationInfo(p.owner, flags, state, userId);
+        if (pi.applicationInfo == null) {
+            return null;
+        }
         return pi;
     }
 
@@ -277,19 +317,27 @@ public class PackageManagerCompat {
     }
 
     public static ApplicationInfo generateApplicationInfo(BPackage p, int flags, BPackageUserState state, int userId) {
-        if (!checkUseInstalledOrHidden(flags, state, p.applicationInfo)) {
+        if (p == null || !checkUseInstalledOrHidden(flags, state, p.applicationInfo)) {
             return null;
         }
         ApplicationInfo baseApplication;
         try {
             baseApplication = BlackBoxCore.getPackageManager().getApplicationInfo(BlackBoxCore.getHostPkg(), flags);
         } catch (Exception e) {
+            Slog.e(TAG, "generateApplicationInfo: host ApplicationInfo unavailable", e);
             return null;
         }
         String sourceDir = p.baseCodePath;
         if (p.applicationInfo == null) {
-            p.applicationInfo = BlackBoxCore.getPackageManager()
-                    .getPackageArchiveInfo(sourceDir, 0).applicationInfo;
+            // Recover from the APK when the settings record lost it.
+            PackageInfo archiveInfo = sourceDir == null ? null
+                    : BlackBoxCore.getPackageManager().getPackageArchiveInfo(sourceDir, 0);
+            if (archiveInfo == null || archiveInfo.applicationInfo == null) {
+                Slog.e(TAG, "generateApplicationInfo: cannot recover ApplicationInfo for "
+                        + p.packageName + ", sourceDir=" + sourceDir);
+                return null;
+            }
+            p.applicationInfo = archiveInfo.applicationInfo;
         }
         ApplicationInfo ai = new ApplicationInfo(p.applicationInfo);
         if ((flags & PackageManager.GET_META_DATA) != 0) {
@@ -332,10 +380,12 @@ public class PackageManagerCompat {
 
     private static boolean checkUseInstalledOrHidden(int flags, BPackageUserState state,
                                                      ApplicationInfo appInfo) {
-        if (AppSystemEnv.isBlackPackage(appInfo.packageName))
+        // appInfo came from the persisted settings record and can legitimately be
+        // null (see generateApplicationInfo). Never dereference it blindly.
+        if (appInfo != null && AppSystemEnv.isBlackPackage(appInfo.packageName))
             return false;
         // Returns false if the package is hidden system app until installed.
-        if (!state.installed || state.hidden) {
+        if (state == null || !state.installed || state.hidden) {
             return false;
         }
         return true;

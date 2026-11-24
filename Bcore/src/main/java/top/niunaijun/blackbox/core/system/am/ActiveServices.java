@@ -50,6 +50,9 @@ public class ActiveServices {
             return;
 //            throw new RuntimeException("resolveService service exception");
         ServiceInfo serviceInfo = resolveInfo.serviceInfo;
+        if (!isInstalledForService(serviceInfo, userId)) {
+            return;
+        }
         ProcessRecord processRecord = BProcessManagerService.get().startProcessLocked(serviceInfo.packageName, serviceInfo.processName, userId, -1, Binder.getCallingPid());
         if (processRecord == null) {
             throw new RuntimeException("Unable to create " + serviceInfo.name);
@@ -101,9 +104,18 @@ public class ActiveServices {
 
     public Intent bindService(Intent intent, final IBinder binder, String resolvedType, int userId) {
         ResolveInfo resolveInfo = resolveService(intent, resolvedType, userId);
-        if (resolveInfo == null)
-            return intent;
+        if (resolveInfo == null) {
+            // Returning the original intent here made the caller forward the
+            // virtual app's component straight to the real system_server, which
+            // answers with "SecurityException: Not allowed to bind to service".
+            // Returning null tells the proxy nothing could be resolved.
+            Log.w(TAG, "bindService: unable to resolve " + intent);
+            return null;
+        }
         ServiceInfo serviceInfo = resolveInfo.serviceInfo;
+        if (!isInstalledForService(serviceInfo, userId)) {
+            return null;
+        }
         ProcessRecord processRecord = BProcessManagerService.get().startProcessLocked(
                 serviceInfo.packageName,
                 serviceInfo.processName,
@@ -189,6 +201,8 @@ public class ActiveServices {
         if (proxyIntent == null)
             return null;
         ProxyServiceRecord proxyServiceRecord = ProxyServiceRecord.create(proxyIntent);
+        if (proxyServiceRecord.mServiceIntent == null)
+            return null;
         ComponentName component = proxyServiceRecord.mServiceIntent.getComponent();
 
         RunningServiceRecord runningServiceRecord = findRunningServiceRecord(proxyServiceRecord.mServiceIntent);
@@ -208,6 +222,30 @@ public class ActiveServices {
         stub.setAction(UUID.randomUUID().toString());
         ProxyServiceRecord.saveStub(stub, targetIntent, serviceInfo, runningServiceRecord, processRecord.userId, runningServiceRecord.mStartId.get());
         return stub;
+    }
+
+    /**
+     * Rejects the request when the guest has no installed user state.
+     *
+     * <p>{@link BProcessManagerService#startProcessLocked} only checks that the
+     * package is known, so without this a start/bind could spawn a proxy process
+     * for a guest whose per-user state is gone and then fail deep inside
+     * {@code handleBindApplication}.
+     *
+     * <p>Packages the container does not manage (host/system components forwarded
+     * via {@code AppSystemEnv.isOpenPackage}) are left alone: they have no virtual
+     * user state at all.
+     */
+    private boolean isInstalledForService(ServiceInfo serviceInfo, int userId) {
+        if (BPackageManagerService.get().getBPackageSetting(serviceInfo.packageName) == null) {
+            return true;
+        }
+        if (!BPackageManagerService.get().isInstalled(serviceInfo.packageName, userId)) {
+            Log.w(TAG, serviceInfo.packageName + " is not installed for user " + userId
+                    + ", refusing to start " + serviceInfo.name);
+            return false;
+        }
+        return true;
     }
 
     private RunningServiceRecord getOrCreateRunningServiceRecord(Intent intent) {

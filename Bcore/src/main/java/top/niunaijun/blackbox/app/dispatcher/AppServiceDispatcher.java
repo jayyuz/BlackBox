@@ -15,6 +15,7 @@ import top.niunaijun.blackbox.app.BActivityThread;
 import top.niunaijun.blackbox.entity.ServiceRecord;
 import top.niunaijun.blackbox.entity.UnbindRecord;
 import top.niunaijun.blackbox.proxy.record.ProxyServiceRecord;
+import top.niunaijun.blackbox.utils.Slog;
 
 import static android.app.Service.START_NOT_STICKY;
 
@@ -56,6 +57,12 @@ public class AppServiceDispatcher {
         intent.setExtrasClassLoader(service.getClassLoader());
 
         ServiceRecord record = findRecord(intent);
+        if (record == null) {
+            // Should not happen: getOrCreateService registers one. Guard anyway so a
+            // guest that vanished mid-flight cannot NPE the host process.
+            Slog.e(TAG, "onBind: no ServiceRecord for " + intent);
+            return null;
+        }
         record.incrementAndGetBindCount(intent);
         if (record.hasBinder(intent)) {
             if (record.isRebind()) {
@@ -87,10 +94,14 @@ public class AppServiceDispatcher {
             return START_NOT_STICKY;
         stubRecord.mServiceIntent.setExtrasClassLoader(service.getClassLoader());
         ServiceRecord record = findRecord(stubRecord.mServiceIntent);
+        if (record == null) {
+            Slog.e(TAG, "onStartCommand: no ServiceRecord for " + stubRecord.mServiceIntent);
+            return START_NOT_STICKY;
+        }
         record.setStartId(stubRecord.mStartId);
         try {
             int i = service.onStartCommand(stubRecord.mServiceIntent, flags, stubRecord.mStartId);
-            BlackBoxCore.getBActivityManager().onStartCommand(proxyIntent, stubRecord.mUserId);
+            BlackBoxCore.getBActivityManager().onStartCommand(proxyIntent, resolveUserId(stubRecord));
             return i;
         } catch (Throwable e) {
             e.printStackTrace();
@@ -159,7 +170,7 @@ public class AppServiceDispatcher {
         Intent intent = stubRecord.mServiceIntent;
 
         try {
-            UnbindRecord unbindRecord = BlackBoxCore.getBActivityManager().onServiceUnbind(proxyIntent, BActivityThread.getUserId());
+            UnbindRecord unbindRecord = BlackBoxCore.getBActivityManager().onServiceUnbind(proxyIntent, resolveUserId(stubRecord));
             if (unbindRecord == null)
                 return false;
 
@@ -170,13 +181,17 @@ public class AppServiceDispatcher {
             stubRecord.mServiceIntent.setExtrasClassLoader(service.getClassLoader());
 
             ServiceRecord record = findRecord(intent);
+            if (record == null) {
+                Slog.e(TAG, "onUnbind: no ServiceRecord for " + intent);
+                return false;
+            }
 
             boolean destroy = unbindRecord.getStartId() == 0;
             if (destroy || record.decreaseConnectionCount(intent)) {
                 boolean b = service.onUnbind(intent);
                 if (destroy) {
                     service.onDestroy();
-                    BlackBoxCore.getBActivityManager().onServiceDestroy(proxyIntent, BActivityThread.getUserId());
+                    BlackBoxCore.getBActivityManager().onServiceDestroy(proxyIntent, resolveUserId(stubRecord));
                     mService.remove(new Intent.FilterComparison(intent));
                 }
                 record.setRebind(true);
@@ -196,6 +211,17 @@ public class AppServiceDispatcher {
         return record.getBinder(intent);
     }
 
+    /**
+     * User id for a proxy call: the record is authoritative, the process config is
+     * only a fallback for intents that predate the extra.
+     */
+    private static int resolveUserId(ProxyServiceRecord record) {
+        if (record != null && record.mUserId != BActivityThread.UNKNOWN_USER) {
+            return record.mUserId;
+        }
+        return BActivityThread.getUserId();
+    }
+
     public void stopService(Intent intent) {
         if (intent == null)
             return;
@@ -207,6 +233,8 @@ public class AppServiceDispatcher {
             try {
                 if (destroy) {
                     mHandler.post(() -> record.getService().onDestroy());
+                    // This runs inside the guest process itself, so the process
+                    // config is the authoritative user here.
                     BlackBoxCore.getBActivityManager().onServiceDestroy(intent, BActivityThread.getUserId());
                     mService.remove(new Intent.FilterComparison(intent));
                 }
@@ -229,7 +257,7 @@ public class AppServiceDispatcher {
         if (record != null && record.getService() != null) {
             return record.getService();
         }
-        Service service = BActivityThread.currentActivityThread().createService(serviceInfo, token);
+        Service service = BActivityThread.currentActivityThread().createService(serviceInfo, token, proxyServiceRecord.mUserId);
         if (service == null)
             return null;
         record = new ServiceRecord();

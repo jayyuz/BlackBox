@@ -46,6 +46,10 @@ public class CopyExecutor implements Executor {
                 }
                 // update baseCodePath
                 ps.pkg.baseCodePath = newFile.getAbsolutePath();
+                // Android 14+ refuses to load a dex from a file the loading process
+                // can write to. The copy above is owned by the host uid, so it has
+                // to lose its write bits before the guest class loader touches it.
+                FileUtils.makeReadOnlyForDex(newFile);
             } catch (IOException e) {
                 e.printStackTrace();
                 return -1;

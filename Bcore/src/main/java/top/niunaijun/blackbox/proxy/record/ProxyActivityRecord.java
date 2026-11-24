@@ -4,6 +4,7 @@ import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.os.IBinder;
 
+import top.niunaijun.blackbox.app.BActivityThread;
 import top.niunaijun.blackbox.utils.compat.BundleCompat;
 
 /**
@@ -35,7 +36,13 @@ public class ProxyActivityRecord {
     }
 
     public static ProxyActivityRecord create(Intent intent) {
-        int userId = intent.getIntExtra("_B_|_user_id_", 0);
+        int userId = intent.getIntExtra("_B_|_user_id_", BActivityThread.UNKNOWN_USER);
+        if (userId == BActivityThread.UNKNOWN_USER) {
+            // Callers below (startProcessLocked, launch intent lookup, ...) need a
+            // real user id. This runs inside the guest process, so its AppConfig is
+            // the authoritative fallback.
+            userId = BActivityThread.getUserId();
+        }
         ActivityInfo activityInfo = intent.getParcelableExtra("_B_|_activity_info_");
         Intent target = intent.getParcelableExtra("_B_|_target_");
         IBinder activityRecord = BundleCompat.getBinder(intent, "_B_|_activity_record_v_");
