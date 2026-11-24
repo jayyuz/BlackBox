@@ -54,7 +54,11 @@ public class ContentProviderStub extends ClassInvocationStub implements BContent
             if (arg instanceof String) {
                 args[0] = mAppPkg;
             } else if (arg.getClass().getName().equals(BRAttributionSource.getRealClass().getName())) {
-                ContextCompat.fixAttributionSourceState(arg, BActivityThread.getBUid());
+                // The binder caller of a provider call is always this (host) process,
+                // so system_server validates the uid against the REAL caller uid.
+                // Passing the virtual uid here made it answer
+                // "Calling uid: 10470 doesn't match source uid: 10002".
+                ContextCompat.fixAttributionSourceState(arg, android.os.Process.myUid());
             }
         }
         try {

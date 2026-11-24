@@ -144,7 +144,17 @@ public final class AppInstrumentation extends BaseInstrumentationDelegate implem
         try {
             return super.newActivity(cl, className, intent);
         } catch (ClassNotFoundException e) {
-            return mBaseInstrumentation.newActivity(cl, className, intent);
+            // The stub proxy activities live in the HOST apk, but the class
+            // loader handed to us is the virtual app's, whose dex path only
+            // contains the guest apk. Retry through the host class loader
+            // before giving up, otherwise every virtual app launch dies with
+            // "Didn't find class ...ProxyActivity$P0".
+            try {
+                return super.newActivity(
+                        BlackBoxCore.getContext().getClassLoader(), className, intent);
+            } catch (ClassNotFoundException ignored) {
+                return mBaseInstrumentation.newActivity(cl, className, intent);
+            }
         }
     }
 }

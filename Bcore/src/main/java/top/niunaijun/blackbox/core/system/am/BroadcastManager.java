@@ -85,10 +85,26 @@ public class BroadcastManager implements PackageMonitor {
                 List<BPackage.ActivityIntentInfo> intents = receiver.intents;
                 for (BPackage.ActivityIntentInfo intent : intents) {
                     ProxyBroadcastReceiver proxyBroadcastReceiver = new ProxyBroadcastReceiver();
-                    BlackBoxCore.getContext().registerReceiver(proxyBroadcastReceiver, intent.intentFilter);
+                    registerHostReceiver(proxyBroadcastReceiver, intent.intentFilter);
                     addReceiver(bPackage.packageName, proxyBroadcastReceiver);
                 }
             }
+        }
+    }
+
+    private void registerHostReceiver(BroadcastReceiver receiver, android.content.IntentFilter filter) {
+        // Android 14 (API 34) requires an explicit exported flag for every
+        // runtime-registered receiver. Without it, registerReceiver throws
+        // SecurityException. BlackBox registers the receiver of the *virtual*
+        // app through the host context, so it must be exported for the proxy
+        // broadcast to reach it. The receiver is still guarded by the stub
+        // action and only forwards to the virtual app's own manifest-declared
+        // receivers.
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            BlackBoxCore.getContext().registerReceiver(receiver, filter,
+                    android.content.Context.RECEIVER_EXPORTED);
+        } else {
+            BlackBoxCore.getContext().registerReceiver(receiver, filter);
         }
     }
 

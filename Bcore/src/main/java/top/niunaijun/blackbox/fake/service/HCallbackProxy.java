@@ -108,9 +108,33 @@ public class HCallbackProxy implements IInjectHook, Handler.Callback {
 
     private Object getLaunchActivityItem(Object clientTransaction) {
         List<Object> mActivityCallbacks = BRClientTransaction.get(clientTransaction).mActivityCallbacks();
+        if (mActivityCallbacks == null) {
+            return null;
+        }
+
+        // Compare against the resolved framework class when available. On some
+        // builds/mirror layouts the real class cannot be resolved, and
+        // getCanonicalName() returns null for anonymous or generated classes,
+        // which used to NPE here and crash the virtual app's main thread.
+        Class<?> launchItemClass = null;
+        try {
+            launchItemClass = BRLaunchActivityItem.getRealClass();
+        } catch (Throwable ignored) {
+        }
+        String launchItemName = launchItemClass != null ? launchItemClass.getName() : null;
 
         for (Object obj : mActivityCallbacks) {
-            if (BRLaunchActivityItem.getRealClass().getName().equals(obj.getClass().getCanonicalName())) {
+            if (obj == null) {
+                continue;
+            }
+            Class<?> objClass = obj.getClass();
+            if (launchItemName != null && launchItemName.equals(objClass.getName())) {
+                return obj;
+            }
+            // Fallback for the case where the mirror class could not be resolved:
+            // match on the simple name instead of risking an NPE.
+            if (launchItemName == null
+                    && objClass.getSimpleName().equals("LaunchActivityItem")) {
                 return obj;
             }
         }
@@ -166,22 +190,21 @@ public class HCallbackProxy implements IInjectHook, Handler.Callback {
             // bind
             if (!BActivityThread.currentActivityThread().isInit()) {
                 BActivityThread.currentActivityThread().bindApplication(activityInfo.packageName,
-                        activityInfo.processName);
+                        activityInfo.processName, stubRecord.mUserId);
                 return true;
             }
 
             int taskId = BRIActivityManager.get(BRActivityManagerNative.get().getDefault()).getTaskForActivity(token, false);
             BlackBoxCore.getBActivityManager().onActivityCreated(taskId, token, stubRecord.mActivityRecord);
 
-            if (BuildCompat.isS()) {
-                Object record = BRActivityThread.get(BlackBoxCore.mainThread()).getLaunchingActivity(token);
-                ActivityThreadActivityClientRecordContext clientRecordContext = BRActivityThreadActivityClientRecord.get(record);
-                clientRecordContext._set_intent(stubRecord.mTarget);
-                clientRecordContext._set_activityInfo(activityInfo);
-                clientRecordContext._set_packageInfo(BActivityThread.currentActivityThread().getPackageInfo());
-
-                checkActivityClient();
-            } else if (BuildCompat.isPie()) {
+            if (BuildCompat.isPie()) {
+                // Since Android 9 the whole launch request travels inside a
+                // ClientTransaction/LaunchActivityItem. Mutating the item is
+                // both sufficient and race-free: ActivityThread builds the
+                // ActivityClientRecord from it *after* this callback returns,
+                // so looking the record up by token here would (a) only work on
+                // Android 12 and (b) always be null on 13+, where
+                // getLaunchingActivity() was deleted.
                 LaunchActivityItemContext launchActivityItemContext = BRLaunchActivityItem.get(r);
                 launchActivityItemContext._set_mIntent(stubRecord.mTarget);
                 launchActivityItemContext._set_mInfo(activityInfo);
@@ -189,6 +212,12 @@ public class HCallbackProxy implements IInjectHook, Handler.Callback {
                 ActivityThreadActivityClientRecordContext clientRecordContext = BRActivityThreadActivityClientRecord.get(r);
                 clientRecordContext._set_intent(stubRecord.mTarget);
                 clientRecordContext._set_activityInfo(activityInfo);
+            }
+
+            if (BuildCompat.isS()) {
+                // Needed so the real activity's Instrumentation reports itself
+                // as the proxy client when the framework queries callbacks.
+                checkActivityClient();
             }
         }
         return false;
