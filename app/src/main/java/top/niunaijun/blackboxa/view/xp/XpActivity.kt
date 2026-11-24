@@ -37,6 +37,7 @@ class XpActivity : LoadingActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(viewBinding.root)
+        applySystemBarInsets(viewBinding.root)
         initToolbar(viewBinding.toolbarLayout.toolbar, R.string.xp_setting, true)
 
         viewModel = ViewModelProvider(this, InjectionUtil.getXpFactory()).get(XpViewModel::class.java)

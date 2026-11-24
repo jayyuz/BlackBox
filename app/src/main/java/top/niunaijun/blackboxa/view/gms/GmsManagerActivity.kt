@@ -33,6 +33,7 @@ class GmsManagerActivity : LoadingActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(viewBinding.root)
+        applySystemBarInsets(viewBinding.root)
         initToolbar(viewBinding.toolbarLayout.toolbar, R.string.gms_manager, true)
         initViewModel()
 

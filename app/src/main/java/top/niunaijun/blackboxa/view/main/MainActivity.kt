@@ -6,7 +6,9 @@ import android.net.Uri
 import android.os.Bundle
 import android.view.Menu
 import android.view.MenuItem
+import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.widget.Toolbar
 import androidx.core.content.edit
 import androidx.viewpager2.widget.ViewPager2
 import com.afollestad.materialdialogs.MaterialDialog
@@ -38,6 +40,7 @@ class MainActivity : LoadingActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(viewBinding.root)
+        applySystemBarInsets(viewBinding.root)
         initToolbar(viewBinding.toolbarLayout.toolbar, R.string.app_name)
         initViewPager()
         initFab()
@@ -46,22 +49,61 @@ class MainActivity : LoadingActivity() {
 
     private fun initToolbarSubTitle() {
         updateUserRemark(0)
-        //hack code
-        viewBinding.toolbarLayout.toolbar.getChildAt(1).setOnClickListener {
-            MaterialDialog(this).show {
-                title(res = R.string.userRemark)
-                input(
-                    hintRes = R.string.userRemark,
-                    prefill = viewBinding.toolbarLayout.toolbar.subtitle
-                ) { _, input ->
-                    AppManager.mRemarkSharedPreferences.edit {
-                        putString("Remark$currentUser", input.toString())
-                        viewBinding.toolbarLayout.toolbar.subtitle = input
-                    }
-                }
-                positiveButton(res = R.string.done)
-                negativeButton(res = R.string.cancel)
+        // Tapping the subtitle opens the rename dialog. Locating the subtitle view
+        // by index (getChildAt(1)) is fragile: Toolbar appends additional children
+        // for insets, menu and navigation, and the index that used to point at the
+        // subtitle could land on the action menu instead, swallowing the settings
+        // button's taps. Match on the text content instead.
+        val subtitleView = findSubtitleView(viewBinding.toolbarLayout.toolbar)
+        if (subtitleView != null) {
+            subtitleView.setOnClickListener { showUserRemarkDialog() }
+        } else {
+            // Toolbar creates the subtitle view lazily on the first setSubtitle().
+            // updateUserRemark() already ran, so reaching here means the toolbar
+            // layout differs; bind on the next layout pass instead of silently
+            // dropping the affordance.
+            viewBinding.toolbarLayout.toolbar.post {
+                findSubtitleView(viewBinding.toolbarLayout.toolbar)
+                    ?.setOnClickListener { showUserRemarkDialog() }
             }
+        }
+    }
+
+    /**
+     * Returns the TextView Toolbar uses for its subtitle, or null when none is
+     * present. The subtitle view only exists once a subtitle has been set.
+     *
+     * Toolbar adds its title and subtitle TextViews in that order and appends
+     * further children for the menu / navigation / insets, so the subtitle is the
+     * last TextView among the first few children. Matching on text content is more
+     * robust than an index: it cannot accidentally bind to the action menu, which
+     * is what made the settings button unresponsive.
+     */
+    private fun findSubtitleView(toolbar: Toolbar): TextView? {
+        val subtitle = toolbar.subtitle ?: return null
+        for (i in 0 until toolbar.childCount) {
+            val child = toolbar.getChildAt(i)
+            if (child is TextView && child.text == subtitle) {
+                return child
+            }
+        }
+        return null
+    }
+
+    private fun showUserRemarkDialog() {
+        MaterialDialog(this).show {
+            title(res = R.string.userRemark)
+            input(
+                hintRes = R.string.userRemark,
+                prefill = viewBinding.toolbarLayout.toolbar.subtitle
+            ) { _, input ->
+                AppManager.mRemarkSharedPreferences.edit {
+                    putString("Remark$currentUser", input.toString())
+                    viewBinding.toolbarLayout.toolbar.subtitle = input
+                }
+            }
+            positiveButton(res = R.string.done)
+            negativeButton(res = R.string.cancel)
         }
     }
 

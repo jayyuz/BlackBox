@@ -15,6 +15,7 @@ class SettingActivity : BaseActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(viewBinding.root)
+        applySystemBarInsets(viewBinding.root)
         initToolbar(viewBinding.toolbarLayout.toolbar, R.string.setting, true)
         supportFragmentManager.beginTransaction()
                 .replace(R.id.fragment, SettingFragment())
