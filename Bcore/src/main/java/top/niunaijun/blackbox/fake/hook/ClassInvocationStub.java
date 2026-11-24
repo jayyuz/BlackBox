@@ -9,6 +9,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 import top.niunaijun.blackbox.utils.MethodParameterUtils;
+import top.niunaijun.blackbox.utils.Slog;
 
 /**
  * Created by Milk on 3/30/21.
@@ -48,10 +49,29 @@ public abstract class ClassInvocationStub implements InvocationHandler, IInjectH
 
     @Override
     public void injectHook() {
-        mBase = getWho();
-        mProxyInvocation = Proxy.newProxyInstance(mBase.getClass().getClassLoader(), MethodParameterUtils.getAllInterface(mBase.getClass()), this);
-        if (!onlyProxy) {
-            inject(mBase, mProxyInvocation);
+        Object who;
+        try {
+            who = getWho();
+        } catch (Throwable t) {
+            // The service does not exist on this release/ROM. Skipping is the
+            // expected outcome for most of the proxies (many are version- or
+            // vendor-specific), so this must not look like a failure.
+            Slog.d(TAG, "skip " + getClass().getSimpleName() + ": " + t);
+            return;
+        }
+        if (who == null) {
+            Slog.d(TAG, "skip " + getClass().getSimpleName() + ": service not available");
+            return;
+        }
+        try {
+            mBase = who;
+            mProxyInvocation = Proxy.newProxyInstance(mBase.getClass().getClassLoader(), MethodParameterUtils.getAllInterface(mBase.getClass()), this);
+            if (!onlyProxy) {
+                inject(mBase, mProxyInvocation);
+            }
+        } catch (Throwable t) {
+            t.printStackTrace();
+            return;
         }
 
         onBindMethod();

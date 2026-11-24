@@ -26,6 +26,7 @@ import top.niunaijun.blackbox.fake.service.IFingerprintManagerProxy;
 import top.niunaijun.blackbox.fake.service.IGraphicsStatsProxy;
 import top.niunaijun.blackbox.fake.service.IJobServiceProxy;
 import top.niunaijun.blackbox.fake.service.ILauncherAppsProxy;
+import top.niunaijun.blackbox.fake.service.ILocaleManagerProxy;
 import top.niunaijun.blackbox.fake.service.ILocationManagerProxy;
 import top.niunaijun.blackbox.fake.service.IMediaRouterServiceProxy;
 import top.niunaijun.blackbox.fake.service.IMediaSessionManagerProxy;
@@ -113,6 +114,13 @@ public class HookManager {
             * */
             addInjector(new IWifiManagerProxy());
             addInjector(new IWifiScannerProxy());
+            // 13.0
+            if (BuildCompat.isTiramisu()) {
+                // AppCompat pushes the app's locale into the framework on every
+                // start; without this the call fails with a SecurityException on a
+                // permission the host can never be granted.
+                addInjector(new ILocaleManagerProxy());
+            }
             // 12.0
             if (BuildCompat.isS()) {
                 addInjector(new IActivityClientProxy(null));
@@ -184,7 +192,7 @@ public class HookManager {
             try {
                 Slog.d(TAG, "hook: " + value);
                 value.injectHook();
-            } catch (Exception e) {
+            } catch (Throwable e) {
                 Slog.d(TAG, "hook error: " + value);
             }
         }
