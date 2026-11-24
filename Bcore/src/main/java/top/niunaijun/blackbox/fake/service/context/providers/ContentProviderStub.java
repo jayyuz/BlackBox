@@ -5,6 +5,7 @@ import android.os.IInterface;
 import java.lang.reflect.Method;
 
 import black.android.content.BRAttributionSource;
+import top.niunaijun.blackbox.BlackBoxCore;
 import top.niunaijun.blackbox.app.BActivityThread;
 import top.niunaijun.blackbox.fake.hook.ClassInvocationStub;
 import top.niunaijun.blackbox.utils.compat.ContextCompat;
@@ -56,9 +57,10 @@ public class ContentProviderStub extends ClassInvocationStub implements BContent
             } else if (arg.getClass().getName().equals(BRAttributionSource.getRealClass().getName())) {
                 // The binder caller of a provider call is always this (host) process,
                 // so system_server validates the uid against the REAL caller uid.
-                // Passing the virtual uid here made it answer
-                // "Calling uid: 10470 doesn't match source uid: 10002".
-                ContextCompat.fixAttributionSourceState(arg, android.os.Process.myUid());
+                // Process.myUid() is unusable here: it is hooked to answer with the
+                // virtual uid inside a guest process, which yields
+                // "Calling uid: 10391 doesn't match source uid: 10001".
+                ContextCompat.fixAttributionSourceState(arg, BlackBoxCore.getHostUid());
             }
         }
         try {

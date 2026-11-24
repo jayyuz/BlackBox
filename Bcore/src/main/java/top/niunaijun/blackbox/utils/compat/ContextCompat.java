@@ -58,9 +58,10 @@ public class ContextCompat {
 
             if (BuildCompat.isS()) {
                 // Must be the real (host) uid: system_server compares it against the
-                // actual binder caller and rejects a virtual uid mismatch.
+                // actual binder caller and rejects a mismatch. Process.myUid() cannot
+                // be used because it is hooked to return the virtual uid in a guest.
                 fixAttributionSourceState(BRContextImpl.get(context).getAttributionSource(),
-                        android.os.Process.myUid());
+                        BlackBoxCore.getHostUid());
             }
         } catch (Exception e) {
             e.printStackTrace();

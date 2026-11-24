@@ -400,9 +400,20 @@ public class BlackBoxCore extends ClientConfiguration {
         Bundle bundle = new Bundle();
         bundle.putString("_B_|_server_name_", name);
         Bundle vm = ProviderCall.callSafely(ProxyManifest.getBindProvider(), "VM", null, bundle);
+        if (vm == null) {
+            // The SystemCallProvider could not be reached: the :black process is not
+            // running (still starting, or it just died). Returning null here is
+            // reported to the caller, which is far better than dereferencing a null
+            // Bundle and taking the whole host application down - that failure mode
+            // used to make the host and the server process kill each other in a loop.
+            Slog.e(TAG, "getService: provider unavailable for " + name);
+            return null;
+        }
         binder = BundleCompat.getBinder(vm, "_B_|_server_");
         Slog.d(TAG, "getService: " + name + ", " + binder);
-        mServices.put(name, binder);
+        if (binder != null) {
+            mServices.put(name, binder);
+        }
         return binder;
     }
 
