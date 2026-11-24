@@ -19,17 +19,10 @@ android {
     }
 
     productFlavors {
-        BlackBox32 {
-            dimension "BlackBox32"
-            applicationId "top.niunaijun.blackboxa32"
-            ndk {
-                abiFilters "armeabi-v7a"
-            }
-            resValue "string", "app_name", "BlackBox32"
-            manifestPlaceholders = [APP_ICON      : "@mipmap/ic_launcher",
-                                    APP_ROUND_ICON: "@mipmap/ic_launcher_round"]
-        }
-
+        // Declared first on purpose: Android Studio selects the first flavor of a
+        // dimension as the default variant, and this device/module set is 64-bit
+        // (the host apk is blackboxa64). Keeping BlackBox32 first made the IDE
+        // install a 32-bit apk by default, which cannot host 64-bit guests.
         BlackBox64 {
             dimension "BlackBox32"
             applicationId "top.niunaijun.blackboxa64"
@@ -41,15 +34,15 @@ android {
                                     APP_ROUND_ICON: "@mipmap/ic_launcher_round"]
         }
 
-        BlackBox32Beta {
+        BlackBox32 {
             dimension "BlackBox32"
-            applicationId "top.niunaijun.blackboxa32_beta"
+            applicationId "top.niunaijun.blackboxa32"
             ndk {
                 abiFilters "armeabi-v7a"
             }
-            resValue "string", "app_name", "BlackBox32 Beta"
-            manifestPlaceholders = [APP_ICON      : "@mipmap/ic_launcher_beta",
-                                    APP_ROUND_ICON: "@mipmap/ic_launcher_round_beta"]
+            resValue "string", "app_name", "BlackBox32"
+            manifestPlaceholders = [APP_ICON      : "@mipmap/ic_launcher",
+                                    APP_ROUND_ICON: "@mipmap/ic_launcher_round"]
         }
 
         BlackBox64Beta {
@@ -60,6 +53,17 @@ android {
             }
             resValue "string", "app_name", "BlackBox64 Beta"
             manifestPlaceholders = [APP_ICON      : "@mipmap/ic_launcher_round_beta",
+                                    APP_ROUND_ICON: "@mipmap/ic_launcher_round_beta"]
+        }
+
+        BlackBox32Beta {
+            dimension "BlackBox32"
+            applicationId "top.niunaijun.blackboxa32_beta"
+            ndk {
+                abiFilters "armeabi-v7a"
+            }
+            resValue "string", "app_name", "BlackBox32 Beta"
+            manifestPlaceholders = [APP_ICON      : "@mipmap/ic_launcher_beta",
                                     APP_ROUND_ICON: "@mipmap/ic_launcher_round_beta"]
         }
     }
