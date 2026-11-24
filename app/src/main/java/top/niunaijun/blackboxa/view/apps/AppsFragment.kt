@@ -17,6 +17,7 @@ import cbfg.rvadapter.RVAdapter
 import com.afollestad.materialdialogs.MaterialDialog
 import top.niunaijun.blackbox.BlackBoxCore
 import top.niunaijun.blackboxa.R
+import top.niunaijun.blackboxa.app.AppManager
 import top.niunaijun.blackboxa.bean.AppInfo
 import top.niunaijun.blackboxa.databinding.FragmentAppsBinding
 import top.niunaijun.blackboxa.util.InjectionUtil
@@ -187,6 +188,21 @@ class AppsFragment : Fragment() {
 
                         R.id.app_shortcut -> {
                             ShortcutUtil.createShortcut(requireContext(), userID, data)
+                        }
+
+                        R.id.app_media_shared -> {
+                            val shared = !AppManager.isMediaShared(data.packageName)
+                            AppManager.setMediaShared(data.packageName, shared)
+                            toast(
+                                if (shared) R.string.app_media_shared_enabled
+                                else R.string.app_media_shared_disabled
+                            )
+                            // The redirect rules are installed when the guest process
+                            // starts, so the new setting only takes effect after a
+                            // restart. Stopping the app here makes the next launch
+                            // pick it up instead of leaving the user with a silently
+                            // ineffective toggle.
+                            stopApk(data)
                         }
                     }
                     return@setOnMenuItemClickListener true

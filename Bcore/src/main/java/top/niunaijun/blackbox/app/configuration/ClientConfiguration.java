@@ -31,6 +31,25 @@ public abstract class ClientConfiguration {
     }
 
     /**
+     * Whether this guest gets direct access to the device's real media storage.
+     *
+     * <p>By default every guest is sandboxed: its {@code /sdcard} is redirected to
+     * {@code blackbox/storage/emulated/<user>}, so a gallery app inside the
+     * container sees an empty library even though the HOST holds
+     * {@code MANAGE_EXTERNAL_STORAGE}. That is the isolation BlackBox is built for.
+     *
+     * <p>Returning true here leaves the user-visible media directories
+     * ({@code DCIM}, {@code Pictures}, {@code Movies}, {@code Download},
+     * {@code Music}) pointing at the real filesystem, and lets the guest query
+     * MediaStore. Use it for apps that genuinely need to browse the user's photos.
+     *
+     * @param packageName the virtual application being started
+     */
+    public boolean shouldShareMediaStorage(String packageName) {
+        return false;
+    }
+
+    /**
      * This method is called when an internal application requests to install a new application.
      *
      * @return Is it handled?

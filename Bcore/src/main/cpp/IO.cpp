@@ -9,6 +9,24 @@ jmethodID getAbsolutePathMethodId;
 
 list<IO::RelocateInfo> relocate_rule;
 
+/*
+ * Prefixes that must never be redirected.
+ *
+ * Populated from Java when a guest is allowed to browse the device's real media
+ * library ("share real media storage"). Only the user-visible media buckets are
+ * listed, so app-private paths under Android/data keep going to the sandbox.
+ */
+list<string> excluded_prefixes;
+
+static bool isExcluded(const char *path) {
+    for (const string &prefix : excluded_prefixes) {
+        if (strncmp(path, prefix.c_str(), prefix.length()) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 char *replace(const char *str, const char *src, const char *dst) {
     const char *pos = str;
     int count = 0;
@@ -39,6 +57,13 @@ const char *IO::redirectPath(const char *__path) {
     for (iterator = relocate_rule.begin(); iterator != relocate_rule.end(); ++iterator) {
         IO::RelocateInfo info = *iterator;
         if (strstr(__path, info.targetPath) && !strstr(__path, "/blackbox/")) {
+            // Paths the host opted out of (currently the user-visible media
+            // buckets when "share real media storage" is enabled for this guest).
+            // They must keep resolving to the real filesystem, so the redirect is
+            // skipped entirely instead of being rewritten.
+            if (isExcluded(__path)) {
+                return __path;
+            }
             char *ret = replace(__path, info.targetPath, info.relocatePath);
             // ALOGD("redirectPath %s  => %s", __path, ret);
             return ret;
@@ -70,6 +95,13 @@ void IO::addRule(const char *targetPath, const char *relocatePath) {
     info.targetPath = targetPath;
     info.relocatePath = relocatePath;
     relocate_rule.push_back(info);
+}
+
+void IO::addExcludedPrefix(const char *path) {
+    if (path == nullptr || path[0] == '\0') {
+        return;
+    }
+    excluded_prefixes.emplace_back(path);
 }
 
 void IO::init(JNIEnv *env) {

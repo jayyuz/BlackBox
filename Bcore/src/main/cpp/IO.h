@@ -24,6 +24,9 @@ public:
 
     static void addRule(const char *targetPath, const char *relocatePath);
 
+    /** Prefixes that must keep resolving to the real filesystem. */
+    static void addExcludedPrefix(const char *path);
+
     static jstring redirectPath(JNIEnv *env, jstring path);
 
     static jobject redirectPath(JNIEnv *env, jobject path);

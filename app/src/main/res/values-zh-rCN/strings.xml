@@ -33,6 +33,9 @@
     <string name="app_clear_hint">是否清除%s的数据？</string>
     <string name="app_remove">卸载应用</string>
     <string name="app_shortcut">创建快捷方式</string>
+    <string name="app_media_shared">共享真实媒体库</string>
+    <string name="app_media_shared_enabled">已共享真实媒体库</string>
+    <string name="app_media_shared_disabled">已恢复沙箱存储</string>
     <string name="shortcut_name">快捷方式名称</string>
     <string name="try_add_shortcut">已尝试添加到桌面</string>
     <string name="add_shortcut_fail_msg">若添加失败，请前往系统设置，为BlackBox打开"创建桌面快捷方式"的权限</string>

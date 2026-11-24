@@ -101,6 +101,17 @@ void addIORule(JNIEnv *env, jclass clazz, jstring target_path,
                 env->GetStringUTFChars(relocate_path, JNI_FALSE));
 }
 
+/*
+ * Registers a prefix that must not be redirected by any IO rule.
+ *
+ * Used for the user-visible media buckets when a guest opted into "share real
+ * media storage": those paths have to keep pointing at the device's real
+ * filesystem, while app-private paths continue to be sandboxed.
+ */
+void addIOExclude(JNIEnv *env, jclass clazz, jstring path) {
+    IO::addExcludedPrefix(env->GetStringUTFChars(path, JNI_FALSE));
+}
+
 void enableIO(JNIEnv *env, jclass clazz) {
     IO::init(env);
     nativeHook(env);
@@ -109,6 +120,7 @@ void enableIO(JNIEnv *env, jclass clazz) {
 static JNINativeMethod gMethods[] = {
         {"hideXposed", "()V",                                     (void *) hideXposed},
         {"addIORule",  "(Ljava/lang/String;Ljava/lang/String;)V", (void *) addIORule},
+        {"addIOExclude", "(Ljava/lang/String;)V",                 (void *) addIOExclude},
         {"enableIO",   "()V",                                     (void *) enableIO},
         {"init",       "(I)V",                                    (void *) init},
 };

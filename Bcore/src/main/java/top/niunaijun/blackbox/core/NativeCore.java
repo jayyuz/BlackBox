@@ -37,6 +37,14 @@ public class NativeCore {
 
     public static native void addIORule(String targetPath, String relocatePath);
 
+    /**
+     * Registers a path prefix that must never be redirected.
+     *
+     * <p>Requires {@link #enableIO()} to run first: the exclusion list is consulted
+     * by the native path interceptor.
+     */
+    public static native void addIOExclude(String path);
+
     public static native void hideXposed();
 
     public static void dumpDex(ClassLoader classLoader, String packageName) {

@@ -463,6 +463,11 @@ public class BlackBoxCore extends ClientConfiguration {
     }
 
     @Override
+    public boolean shouldShareMediaStorage(String packageName) {
+        return mClientConfiguration.shouldShareMediaStorage(packageName);
+    }
+
+    @Override
     public boolean requestInstallPackage(File file, int userId) {
         return mClientConfiguration.requestInstallPackage(file, userId);
     }

@@ -12,6 +12,7 @@ import java.io.File;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -71,9 +72,13 @@ public class IOCore {
         if (path.contains("/blackbox/")) {
             return path;
         }
+        // A blacklisted path must be returned unchanged, not replaced with the
+        // matched prefix: `search` is only the key that matched inside the trie
+        // (e.g. "/sdcard/DCIM"), while `path` is the full original path including
+        // the file name.
         String search = sBlackTree.search(path);
         if (!TextUtils.isEmpty(search))
-            return search;
+            return path;
 
         //Search the key from TrieTree
         String key = mTrieTree.search(path);
@@ -133,6 +138,7 @@ public class IOCore {
 
                 blackRule.add("/sdcard/Pictures");
                 blackRule.add(String.format("/storage/emulated/%d/Pictures", systemUserId));
+                addMediaPassthrough(blackRule, packageName, systemUserId);
             }
             if (BlackBoxCore.get().isHideRoot()) {
                 hideRoot(rule);
@@ -148,6 +154,35 @@ public class IOCore {
             get().addBlackRedirect(s);
         }
         NativeCore.enableIO();
+        // The native interceptor keeps its own rule table, so the exclusions have
+        // to be handed over explicitly - addBlackRedirect only affects the Java
+        // side of redirectPath(). Must come after enableIO(), which is what
+        // installs the hooks that consult this list.
+        for (String s : blackRule) {
+            NativeCore.addIOExclude(s);
+        }
+    }
+
+    /**
+     * Adds the user-visible media directories to the passthrough list when the
+     * host application opted this guest into shared media storage.
+     *
+     * <p>{@code blackRule} entries are paths that must NOT be redirected, so they
+     * keep resolving to the device's real filesystem. Only the top-level media
+     * buckets are exempted; app-private and cache paths stay sandboxed, because
+     * those are what the isolation actually protects.
+     */
+    private static void addMediaPassthrough(Set<String> blackRule, String packageName, int systemUserId) {
+        if (!BlackBoxCore.get().shouldShareMediaStorage(packageName)) {
+            return;
+        }
+        // The media buckets Android treats as user-visible content. Anything else
+        // (Android/data, Android/obb, app caches) keeps going to the sandbox.
+        String[] buckets = {"DCIM", "Pictures", "Movies", "Music", "Download", "Documents"};
+        for (String bucket : buckets) {
+            blackRule.add("/sdcard/" + bucket);
+            blackRule.add(String.format(Locale.CHINA, "/storage/emulated/%d/%s", systemUserId, bucket));
+        }
     }
 
     private void hideRoot(Map<String, String> rule) {

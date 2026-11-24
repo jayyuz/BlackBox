@@ -8,6 +8,7 @@ import top.niunaijun.blackbox.app.BActivityThread
 import top.niunaijun.blackbox.app.configuration.AppLifecycleCallback
 import top.niunaijun.blackbox.app.configuration.ClientConfiguration
 import top.niunaijun.blackboxa.app.App
+import top.niunaijun.blackboxa.app.AppManager
 import top.niunaijun.blackboxa.biz.cache.AppSharedPreferenceDelegate
 import java.io.File
 
@@ -114,6 +115,10 @@ class BlackBoxLoader {
 
             override fun isEnableDaemonService(): Boolean {
                 return mDaemonEnable
+            }
+
+            override fun shouldShareMediaStorage(packageName: String?): Boolean {
+                return packageName != null && AppManager.isMediaShared(packageName)
             }
 
             override fun requestInstallPackage(file: File?, userId: Int): Boolean {
