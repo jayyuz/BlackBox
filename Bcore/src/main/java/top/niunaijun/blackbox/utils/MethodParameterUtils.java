@@ -8,6 +8,34 @@ import top.niunaijun.blackbox.app.BActivityThread;
 
 public class MethodParameterUtils {
 
+    /**
+     * Reads a flag-like argument from a Binder proxy call.
+     *
+     * <p>Android 13 (API 33) widened the flag parameters of the IPackageManager
+     * AIDL methods (getPackageInfo, getApplicationInfo, getActivityInfo,
+     * resolveIntent, getInstalledPackages, ...) from {@code int} to
+     * {@code long}. A blind {@code (int) args[n]} cast therefore throws
+     * ClassCastException on Android 13+ virtual app processes. This helper
+     * accepts either boxed type and truncates, which is exactly what the
+     * framework does internally for these bit sets.
+     */
+    public static int getFlags(Object[] args, int index) {
+        if (args == null || index < 0 || index >= args.length) {
+            return 0;
+        }
+        Object value = args[index];
+        if (value instanceof Integer) {
+            return (Integer) value;
+        }
+        if (value instanceof Long) {
+            return (int) ((Long) value).longValue();
+        }
+        if (value instanceof Number) {
+            return ((Number) value).intValue();
+        }
+        return 0;
+    }
+
     public static <T> T getFirstParam(Object[] args, Class<T> tClass) {
         if (args == null) {
             return null;

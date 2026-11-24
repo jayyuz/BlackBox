@@ -2,6 +2,7 @@ package top.niunaijun.blackbox.proxy;
 
 import android.app.Service;
 import android.content.Intent;
+import android.content.pm.ServiceInfo;
 import android.content.res.Configuration;
 import android.os.IBinder;
 
@@ -67,8 +68,19 @@ public class ProxyService extends Service {
 
     private void showNotification() {
         NotificationCompat.Builder builder = new NotificationCompat.Builder(getApplicationContext(), getPackageName() + ".blackbox_proxy")
-                .setPriority(NotificationCompat.PRIORITY_MAX);
-        if (BuildCompat.isOreo()) {
+                .setPriority(NotificationCompat.PRIORITY_MAX)
+                .setSmallIcon(android.R.drawable.stat_notify_sync)
+                .setContentTitle("BlackBox")
+                .setContentText("Running");
+        if (!BuildCompat.isOreo()) {
+            return;
+        }
+        // API 34+ requires the foreground service type at call time as well as
+        // in the manifest; omitting it makes startForeground throw.
+        if (BuildCompat.isUpsideDownCake()) {
+            startForeground(BlackBoxCore.getHostPkg().hashCode(), builder.build(),
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+        } else {
             startForeground(BlackBoxCore.getHostPkg().hashCode(), builder.build());
         }
     }

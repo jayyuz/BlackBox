@@ -4,6 +4,8 @@ import android.app.NotificationManager;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ServiceInfo;
+import android.os.Build;
 import android.os.IBinder;
 import android.util.Log;
 
@@ -53,8 +55,21 @@ public class DaemonService extends Service {
 
     private void showNotification() {
         NotificationCompat.Builder builder = new NotificationCompat.Builder(getApplicationContext(), getPackageName() + ".blackbox_core")
-                .setPriority(NotificationCompat.PRIORITY_MAX);
-        startForeground(NOTIFY_ID, builder.build());
+                .setPriority(NotificationCompat.PRIORITY_MAX)
+                .setSmallIcon(android.R.drawable.stat_notify_sync)
+                .setContentTitle("BlackBox")
+                .setContentText("BlackBox service is running");
+        // Android 14 (API 34) requires the foreground service type to be
+        // declared in the manifest *and* passed to startForeground, otherwise
+        // the call throws MissingForegroundServiceTypeException and takes the
+        // process down. Manifest declares: dataSync|specialUse.
+        if (BuildCompat.isUpsideDownCake()) {
+            startForeground(NOTIFY_ID, builder.build(),
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                            | ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+        } else {
+            startForeground(NOTIFY_ID, builder.build());
+        }
     }
 
     public static class DaemonInnerService extends Service {

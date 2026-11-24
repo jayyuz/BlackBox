@@ -57,7 +57,10 @@ public class ContextCompat {
             BRContentResolver.get(context.getContentResolver())._set_mPackageName(BlackBoxCore.getHostPkg());
 
             if (BuildCompat.isS()) {
-                fixAttributionSourceState(BRContextImpl.get(context).getAttributionSource(), BActivityThread.getBUid());
+                // Must be the real (host) uid: system_server compares it against the
+                // actual binder caller and rejects a virtual uid mismatch.
+                fixAttributionSourceState(BRContextImpl.get(context).getAttributionSource(),
+                        android.os.Process.myUid());
             }
         } catch (Exception e) {
             e.printStackTrace();

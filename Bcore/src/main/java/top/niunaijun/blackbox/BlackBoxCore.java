@@ -28,13 +28,13 @@ import java.util.Map;
 
 import black.android.app.BRActivityThread;
 import black.android.os.BRUserHandle;
-import me.weishu.reflection.Reflection;
 import top.canyie.pine.PineConfig;
 import top.niunaijun.blackbox.app.LauncherActivity;
 import top.niunaijun.blackbox.app.configuration.AppLifecycleCallback;
 import top.niunaijun.blackbox.app.configuration.ClientConfiguration;
 import top.niunaijun.blackbox.core.GmsCore;
 import top.niunaijun.blackbox.core.env.BEnvironment;
+import top.niunaijun.blackbox.core.env.HiddenApiCompat;
 import top.niunaijun.blackbox.core.system.DaemonService;
 import top.niunaijun.blackbox.core.system.ServiceManager;
 import top.niunaijun.blackbox.core.system.user.BUserHandle;
@@ -122,7 +122,17 @@ public class BlackBoxCore extends ClientConfiguration {
         if (clientConfiguration == null) {
             throw new IllegalArgumentException("ClientConfiguration is null!");
         }
-        Reflection.unseal(context);
+        // me.weishu:free_reflection's Reflection.unseal() writes a helper dex into
+        // Context#getCodeCacheDir() and loads it. That dex is owned by this process
+        // and therefore writable, which Android 14 refuses:
+        //   E/...: Attempt to load writable dex file: .../code_cache/17954...dex
+        //   W/BootstrapClass: reflect bootstrap failed: NoSuchMethodException
+        //                      VMRuntime.setHiddenApiExemptions
+        // It only ever covered API 28's light-grey list anyway, where it also fails
+        // on modern releases. HiddenApiCompat.install() below does the same job
+        // through LSPosed's bypass, which needs no dex and covers every list, so the
+        // unseal() pass is dropped instead of trying to keep its temp file writable.
+        HiddenApiCompat.install();
         sContext = context;
         mClientConfiguration = clientConfiguration;
         initNotificationManager();
@@ -138,10 +148,11 @@ public class BlackBoxCore extends ClientConfiguration {
         }
         if (BlackBoxCore.get().isBlackProcess()) {
             BEnvironment.load();
-            if (processName.endsWith("p0")) {
-//                android.os.Debug.waitForDebugger();
-            }
-//            android.os.Debug.waitForDebugger();
+            // Must run before anything in this process touches permission APIs: on
+            // Android 14 PermissionManager caches checkPermission() per (perm, uid)
+            // inside the process, and a guest shares the host's uid, so a stale
+            // "denied" entry would never come back to our hook.
+            disablePermissionCache();
         }
         if (isServerProcess()) {
             if (clientConfiguration.isEnableDaemonService()) {
@@ -157,6 +168,41 @@ public class BlackBoxCore extends ClientConfiguration {
         PineConfig.debug = true;
         PineConfig.debuggable = true;
         HookManager.get().init();
+    }
+
+    /**
+     * Turns off PermissionManager's process-local permission cache.
+     *
+     * <p>Android 14 caches {@code checkPermission(perm, pid, uid)} results per
+     * (permission, uid) inside the calling process. Since a virtual app runs under
+     * the HOST's uid, the first answer (usually "denied") sticks for the whole
+     * session and our binder hook is never consulted again - which is exactly why
+     * a freshly granted RECORD_AUDIO kept being reported as denied.
+     *
+     * <p>{@code disableLocal()} stops future caching; the explicit invalidation
+     * afterwards clears entries written before we got here.
+     */
+    private static void disablePermissionCache() {        try {
+            Class<?> permissionManager = Class.forName("android.permission.PermissionManager");
+            java.lang.reflect.Method disable =
+                    permissionManager.getDeclaredMethod("disablePermissionCache");
+            disable.setAccessible(true);
+            disable.invoke(null);
+        } catch (Throwable e) {
+        }
+        try {
+            java.lang.reflect.Method invalidate = Class
+                    .forName("android.app.PropertyInvalidatedCache")
+                    .getDeclaredMethod("invalidateCache", String.class);
+            invalidate.setAccessible(true);
+            invalidate.invoke(null, "checkPermission");
+            invalidate.invoke(null, "checkPackageNamePermission");
+        } catch (Throwable e) {
+        }
+    }
+
+    public void disablePermissionCacheEarly() {
+        disablePermissionCache();
     }
 
     public void doCreate() {

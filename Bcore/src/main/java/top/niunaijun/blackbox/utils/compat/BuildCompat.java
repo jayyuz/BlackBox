@@ -15,6 +15,26 @@ public class BuildCompat {
         return 0;
     }
 
+    // 16 (Baklava) - API 36
+    public static boolean isBaklava() {
+        return Build.VERSION.SDK_INT >= 36 || (Build.VERSION.SDK_INT >= 35 && Build.VERSION.PREVIEW_SDK_INT == 1);
+    }
+
+    // 15 (Vanilla Ice Cream) - API 35
+    public static boolean isVanillaIceCream() {
+        return Build.VERSION.SDK_INT >= 35 || (Build.VERSION.SDK_INT >= 34 && Build.VERSION.PREVIEW_SDK_INT == 1);
+    }
+
+    // 14 (UpsideDownCake) - API 34
+    public static boolean isUpsideDownCake() {
+        return Build.VERSION.SDK_INT >= 34 || (Build.VERSION.SDK_INT >= 33 && Build.VERSION.PREVIEW_SDK_INT == 1);
+    }
+
+    // 13 (Tiramisu) - API 33
+    public static boolean isTiramisu() {
+        return Build.VERSION.SDK_INT >= 33 || (Build.VERSION.SDK_INT >= 32 && Build.VERSION.PREVIEW_SDK_INT == 1);
+    }
+
     // 12
     public static boolean isS() {
         return Build.VERSION.SDK_INT >= 31 || (Build.VERSION.SDK_INT >= 30 && Build.VERSION.PREVIEW_SDK_INT == 1);
