@@ -249,7 +249,27 @@ public class IActivityManagerProxy extends ClassInvocationStub {
             int userId = intent.getIntExtra("_B_|_UserId", -1);
             userId = userId == -1 ? BActivityThread.getUserId() : userId;
             ResolveInfo resolveInfo = BlackBoxCore.getBPackageManager().resolveService(intent, 0, resolvedType, userId);
-            if (resolveInfo != null || AppSystemEnv.isOpenPackage(intent.getComponent())) {
+
+            boolean openPackage = AppSystemEnv.isOpenPackage(intent.getComponent());
+            if (!openPackage && resolveInfo == null) {
+                // Nothing in the container resolves this and the host does not expose
+                // it either: refuse rather than forwarding the guest's component to
+                // system_server, which would answer "Not allowed to bind to service".
+                return 0;
+            }
+
+            if (openPackage && resolveInfo == null) {
+                // A host component (WebView's SandboxedProcessService, GMS, an IME...)
+                // is bound natively by the real system. Passing it through the
+                // container is fatal: BPackageManagerService does not know the
+                // package, so ActiveServices.resolveService returns null and the
+                // binding silently fails ("Failed to establish the service
+                // connection"), which is why WebView-based guests never loaded
+                // anything. Bind it for real and skip the connection proxy.
+                return method.invoke(who, args);
+            }
+
+            {
                 Intent proxyIntent = BlackBoxCore.getBActivityManager().bindService(intent,
                         connection == null ? null : connection.asBinder(),
                         resolvedType,
