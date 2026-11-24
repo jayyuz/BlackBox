@@ -11,10 +11,20 @@
  * Class:     java_io_UnixFileSystem
  * Method:    canonicalize0
  * Signature: (Ljava/lang/String;)Ljava/lang/String;
+ *
+ * Android 15 (API 35) changed this to
+ *   canonicalize0(String path, boolean isAtLeastTargetSdk35)
+ * with the single-argument overload becoming a plain (non-native) wrapper, so
+ * the old signature no longer resolves on 35+. Both are hooked below.
  */
 HOOK_JNI(jstring, canonicalize0, JNIEnv *env, jobject obj, jstring path) {
     jstring redirect = IO::redirectPath(env, path);
     return orig_canonicalize0(env, obj, redirect);
+}
+
+HOOK_JNI(jstring, canonicalize0_, JNIEnv *env, jobject obj, jstring path, jboolean isAtLeastTargetSdk35) {
+    jstring redirect = IO::redirectPath(env, path);
+    return orig_canonicalize0_(env, obj, redirect, isAtLeastTargetSdk35);
 }
 
 /*
@@ -110,8 +120,15 @@ HOOK_JNI(jboolean, getSpace0, JNIEnv *env, jobject obj, jobject file, jint t) {
 
 void UnixFileSystemHook::init(JNIEnv *env) {
     const char *className = "java/io/UnixFileSystem";
+    // Android < 15
     JniHook::HookJniFun(env, className, "canonicalize0", "(Ljava/lang/String;)Ljava/lang/String;",
                         (void *) new_canonicalize0, (void **) (&orig_canonicalize0), false);
+    // Android >= 15 (API 35): parent-dir-of-root fix added a second parameter.
+    // Safe to attempt unconditionally; HookJniFun logs and returns when the
+    // method or signature is absent.
+    JniHook::HookJniFun(env, className, "canonicalize0",
+                        "(Ljava/lang/String;Z)Ljava/lang/String;",
+                        (void *) new_canonicalize0_, (void **) (&orig_canonicalize0_), false);
 //    JniHook::HookJniFun(env, className, "getBooleanAttributes0", "(Ljava/lang/String;)I",
 //                        (void *) new_getBooleanAttributes0,
 //                        (void **) (&orig_getBooleanAttributes0), false);

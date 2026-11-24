@@ -77,6 +77,21 @@ inline static bool ClearFastNativeFlag(char *art_method) {
     return HookEnv.api_level < __ANDROID_API_P__ && ClearAccessFlag(art_method, kAccFastNative);
 }
 
+/*
+ * @CriticalNative changes the ABI of the callee: ART generates a stub that
+ * passes the declared arguments straight through, without a JNIEnv* or jclass.
+ * All replacement implementations in this library are ordinary JNI functions,
+ * so the flag must be dropped before RegisterNatives or the hook will be
+ * invoked with a garbage environment pointer.
+ *
+ * Binder.getCallingUid() carries @CriticalNative from Android 10 (API 29)
+ * onwards, which is exactly one of the methods hooked below, so this is not
+ * merely defensive.
+ */
+inline static void ClearCriticalNativeFlag(char *art_method) {
+    ClearAccessFlag(art_method, kAccCriticalNative);
+}
+
 static void *GetArtMethod(JNIEnv *env, jclass clazz, jmethodID methodId) {
     if (HookEnv.api_level >= __ANDROID_API_Q__) {
         jclass executable = env->FindClass("java/lang/reflect/Executable");
@@ -105,6 +120,9 @@ bool CheckFlags(void *artMethod) {
         return false;
     }
     ClearFastNativeFlag(method);
+    // Must happen for every API level: our replacement functions use the plain
+    // JNI ABI while @CriticalNative methods are called without JNIEnv*/jclass.
+    ClearCriticalNativeFlag(method);
     return true;
 }
 
@@ -220,15 +238,23 @@ void JniHook::InitJniHook(JNIEnv *env, int api_level) {
 
     void *nativeOffset = GetArtMethod(env, clazz, nativeOffsetId);
     void *nativeOffset2 = GetArtMethod(env, clazz, nativeOffset2Id);
-    HookEnv.art_method_size = (size_t) nativeOffset2 - (size_t) nativeOffset;
+    // Byte distance between two consecutive ArtMethod instances. These methods
+    // are adjacent in the dex (declared next to each other), so the delta also
+    // equals the real sizeof(ArtMethod), which we do not know statically.
+    HookEnv.art_method_size = (size_t) ((char *) nativeOffset2 - (char *) nativeOffset);
+    const size_t slots = HookEnv.art_method_size / sizeof(uintptr_t);
 
     // calc native offset
     auto artMethod = reinterpret_cast<uintptr_t *>(nativeOffset);
-    for (int i = 0; i < HookEnv.art_method_size; ++i) {
+    for (size_t i = 0; i < slots; ++i) {
         if (reinterpret_cast<void *>(artMethod[i]) == native_offset) {
-            HookEnv.art_method_native_offset = i;
+            HookEnv.art_method_native_offset = (int) i;
             break;
         }
+    }
+    if (HookEnv.art_method_native_offset == 0) {
+        // Would make HookJniFun bail out silently for the whole process.
+        ALOGE("JniHook: unable to locate ArtMethod::data_ (native offset)");
     }
 
     uint32_t flags = 0x0;
@@ -241,10 +267,10 @@ void JniHook::InitJniHook(JNIEnv *env, int api_level) {
     }
 
     char *start = reinterpret_cast<char *>(artMethod);
-    for (int i = 1; i < HookEnv.art_method_size; ++i) {
+    for (size_t i = 1; i < HookEnv.art_method_size / sizeof(uint32_t); ++i) {
         auto value = *(uint32_t *) (start + i * sizeof(uint32_t));
         if (value == flags) {
-            HookEnv.art_method_flags_offset = i * sizeof(uint32_t);
+            HookEnv.art_method_flags_offset = (int) (i * sizeof(uint32_t));
             break;
         }
     }
@@ -257,10 +283,10 @@ void JniHook::InitJniHook(JNIEnv *env, int api_level) {
         flags = flags | kAccPublicApi;
     }
     char *fieldStart = reinterpret_cast<char *>(nativeOffsetField);
-    for (int i = 1; i < HookEnv.art_field_size; ++i) {
+    for (size_t i = 1; i < HookEnv.art_field_size / sizeof(uint32_t); ++i) {
         auto value = *(int32_t *) (fieldStart + i * sizeof(int32_t));
         if (value == flags) {
-            HookEnv.art_field_flags_offset = i * sizeof(int32_t);
+            HookEnv.art_field_flags_offset = (int) (i * sizeof(int32_t));
             break;
         }
     }

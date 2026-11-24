@@ -7,6 +7,10 @@
 
 #include "macros.h"
 
+// NDK r27 no longer transitively provides std::nullptr_t; make the dependency
+// explicit so this header stays self-contained.
+#include <cstddef>
+
 template<typename T>
 class ScopedLocalRef {
 public:

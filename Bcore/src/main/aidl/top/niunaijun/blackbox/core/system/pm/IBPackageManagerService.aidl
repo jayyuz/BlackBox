@@ -46,4 +46,9 @@ interface IBPackageManagerService {
     boolean isInstalled(String packageName, int userId);
     List<InstalledPackage> getInstalledPackagesAsUser(int userId);
     String[] getPackagesForUid(int uid, int userId);
+
+    int checkPermission(String permission, boolean hostGranted, int userId, String guestPackage);
+    void grantRuntimePermission(String packageName, String permission, int userId);
+    void revokeRuntimePermission(String packageName, String permission, int userId);
+    void recordRequestedPermissions(String packageName, in String[] permissions, int userId);
 }

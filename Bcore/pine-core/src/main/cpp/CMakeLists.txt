@@ -22,7 +22,10 @@ set(PINE_SOURCES
         utils/well_known_classes.cpp)
 
 if (CMAKE_ANDROID_ARCH_ABI STREQUAL "armeabi-v7a")
-    set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} -arch armv7")
+    # NDK r23+ defaults to `-Wl,--no-rosegment` with a PIC-only linker. The
+    # thumb2 trampolines emit R_ARM_THM_PC12 relocations against data symbols,
+    # which ld.lld only accepts when the assembler was told to emit PIC.
+    set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} -arch armv7 -fPIC")
     set(PINE_SOURCES
             ${PINE_SOURCES}
             trampoline/arch/thumb2.cpp
