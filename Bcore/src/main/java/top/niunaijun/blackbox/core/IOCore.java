@@ -40,6 +40,15 @@ public class IOCore {
     private static final TrieTree sBlackTree = new TrieTree();
     private final Map<String, String> mRedirectMap = new LinkedHashMap<>();
 
+    /**
+     * Media buckets this guest may read from the real filesystem.
+     *
+     * <p>Kept separate from {@code blackRule}: that list predates this feature and
+     * has different semantics (the matched prefix becomes the result), so mixing
+     * the two changed the behaviour of guests that never opted in.
+     */
+    private static final Set<String> mediaPassthrough = new HashSet<>();
+
     private static final Map<String, Map<String, String>> sCachePackageRedirect = new HashMap<>();
 
     public static IOCore get() {
@@ -72,13 +81,14 @@ public class IOCore {
         if (path.contains("/blackbox/")) {
             return path;
         }
-        // A blacklisted path must be returned unchanged, not replaced with the
-        // matched prefix: `search` is only the key that matched inside the trie
-        // (e.g. "/sdcard/DCIM"), while `path` is the full original path including
-        // the file name.
+        // A blacklisted path keeps its real identity: `search` is the registered
+        // key (e.g. "/sdcard/Pictures"), which is what callers of this list expect.
+        // Do not "fix" this into `return path` - doing so changed the path every
+        // guest sees for those directories, and apps relying on the old behaviour
+        // (Juejin's WebView, for one) stopped rendering.
         String search = sBlackTree.search(path);
         if (!TextUtils.isEmpty(search))
-            return path;
+            return search;
 
         //Search the key from TrieTree
         String key = mTrieTree.search(path);
@@ -154,11 +164,17 @@ public class IOCore {
             get().addBlackRedirect(s);
         }
         NativeCore.enableIO();
-        // The native interceptor keeps its own rule table, so the exclusions have
-        // to be handed over explicitly - addBlackRedirect only affects the Java
-        // side of redirectPath(). Must come after enableIO(), which is what
-        // installs the hooks that consult this list.
-        for (String s : blackRule) {
+        // The native interceptor keeps its own rule table, so opt-in exclusions
+        // have to be handed over explicitly - addBlackRedirect only affects the
+        // Java side of redirectPath(). Must come after enableIO(), which installs
+        // the hooks that consult this list.
+        //
+        // Only the media-sharing buckets are forwarded, never the legacy blackRule
+        // entries. Those existed before this mechanism and are already handled by
+        // the Java side; feeding them to the native layer as well changed the
+        // behaviour of every guest and broke apps that rely on the old
+        // "rewrite to the registered prefix" semantics.
+        for (String s : mediaPassthrough) {
             NativeCore.addIOExclude(s);
         }
     }
@@ -167,10 +183,10 @@ public class IOCore {
      * Adds the user-visible media directories to the passthrough list when the
      * host application opted this guest into shared media storage.
      *
-     * <p>{@code blackRule} entries are paths that must NOT be redirected, so they
-     * keep resolving to the device's real filesystem. Only the top-level media
-     * buckets are exempted; app-private and cache paths stay sandboxed, because
-     * those are what the isolation actually protects.
+     * <p>{@code mediaPassthrough} entries are paths that must NOT be redirected,
+     * so they keep resolving to the device's real filesystem. Only the top-level
+     * media buckets are exempted; app-private and cache paths stay sandboxed,
+     * because those are what the isolation actually protects.
      */
     private static void addMediaPassthrough(Set<String> blackRule, String packageName, int systemUserId) {
         if (!BlackBoxCore.get().shouldShareMediaStorage(packageName)) {
@@ -180,8 +196,8 @@ public class IOCore {
         // (Android/data, Android/obb, app caches) keeps going to the sandbox.
         String[] buckets = {"DCIM", "Pictures", "Movies", "Music", "Download", "Documents"};
         for (String bucket : buckets) {
-            blackRule.add("/sdcard/" + bucket);
-            blackRule.add(String.format(Locale.CHINA, "/storage/emulated/%d/%s", systemUserId, bucket));
+            mediaPassthrough.add("/sdcard/" + bucket);
+            mediaPassthrough.add(String.format(Locale.CHINA, "/storage/emulated/%d/%s", systemUserId, bucket));
         }
     }
 
