@@ -399,6 +399,10 @@ public class ComponentResolver {
                 return null;
             }
             ServiceInfo si = PackageManagerCompat.generateServiceInfo(service, mFlags, ps.readUserState(userId), userId);
+            // Disabled services are not resolvable on a real device either.
+            if (si == null || (service.info != null && !service.info.enabled)) {
+                return null;
+            }
 
             final ResolveInfo res = new ResolveInfo();
             res.serviceInfo = si;
@@ -501,8 +505,20 @@ public class ComponentResolver {
             if (ps == null) {
                 return null;
             }
+            // A component declared with android:enabled="false" is invisible to
+            // intent resolution on a real device. Skipping this check made disabled
+            // launcher entries resolve - F-Droid, for instance, ships a disabled
+            // PanicKit disguise activity ("Calculator") whose LAUNCHER filter sat
+            // first in the manifest, so launching the app from the container opened
+            // the disguise instead of the real UI.
+            if (activity.info != null && !activity.info.enabled) {
+                return null;
+            }
             ActivityInfo ai =
                     PackageManagerCompat.generateActivityInfo(activity, mFlags, ps.readUserState(userId), userId);
+            if (ai == null) {
+                return null;
+            }
 
             final ResolveInfo res = new ResolveInfo();
             res.activityInfo = ai;
@@ -622,6 +638,10 @@ public class ComponentResolver {
             }
 
             ProviderInfo pi = PackageManagerCompat.generateProviderInfo(provider, mFlags, ps.readUserState(userId), userId);
+            // Disabled providers are not resolvable on a real device either.
+            if (pi == null || (provider.info != null && !provider.info.enabled)) {
+                return null;
+            }
             final ResolveInfo res = new ResolveInfo();
             res.providerInfo = pi;
             if ((mFlags & PackageManager.GET_RESOLVED_FILTER) != 0) {
